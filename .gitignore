@@ -1,1 +1,7 @@
 .DS_Store
+
+# Android / Gradle generated files
+.gradle/
+build/
+app/build/
+local.properties
