@@ -211,7 +211,7 @@ AI 支持：
 - 日程详情页
 - 天气查询与日程地点绑定
 - 日程开始前提醒
-- iOS 或 Android 端基础通知
+- Android 端基础通知
 - 今日小组件
 - 简化版明日预告弹窗
 
@@ -310,13 +310,19 @@ Vela
 
 ### 移动端
 
-可选技术路线：
+第一版已确定为 Android 原生单端 MVP。
 
-- React Native：适合快速开发 iOS 与 Android 双端。
-- Flutter：适合高一致性 UI 和复杂动画。
-- Swift + Kotlin：适合追求原生体验、通知、小组件和系统日历深度集成。
+固定技术路线：
 
-如果第一阶段资源有限，建议先选一个主平台做深，例如先做 iOS。
+- Kotlin
+- Jetpack Compose
+- Material 3
+- Navigation Compose
+- ViewModel + StateFlow
+- Kotlin Serialization
+- Jetpack Glance 小组件
+
+当前工程机已连接 Android 真机，首版工程参数、SDK、Gradle、JDK、目录边界和真机运行规则见 [Android 工程契约](docs/android-engineering-contract.md)。
 
 ### 后端
 
@@ -457,6 +463,7 @@ Vela 会处理大量敏感信息，包括位置、日程、人际关系、图片
 - [聊天式日程导入契约](docs/chat-import-contract.md)
 - [三端集成契约](docs/integration-contract.md)
 - [团队交接说明](docs/team-handoff.md)
+- [Android 工程契约](docs/android-engineering-contract.md)
 
 下一步建议：
 
