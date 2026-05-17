@@ -1,9 +1,12 @@
 package com.vela.app.navigation
 
 object VelaRoutes {
-    const val Home = "home"
-    const val ImportChat = "import/chat"
     const val Calendar = "calendar"
+    const val Schedule = "schedule"
+    const val AiSchedule = "ai/schedule"
+    const val ImportChat = AiSchedule
+    const val SmartEdit = "smart/edit"
+    const val Settings = "settings"
     const val Event = "event/{eventId}"
 
     fun event(eventId: String): String = "event/$eventId"
@@ -17,18 +20,18 @@ data class VelaTopLevelDestination(
 
 val VelaTopLevelDestinations = listOf(
     VelaTopLevelDestination(
-        route = VelaRoutes.Home,
-        label = "Home",
-        compactLabel = "H",
-    ),
-    VelaTopLevelDestination(
-        route = VelaRoutes.ImportChat,
-        label = "Import",
-        compactLabel = "I",
-    ),
-    VelaTopLevelDestination(
         route = VelaRoutes.Calendar,
-        label = "Calendar",
-        compactLabel = "C",
+        label = "日历",
+        compactLabel = "□",
+    ),
+    VelaTopLevelDestination(
+        route = VelaRoutes.Schedule,
+        label = "日程",
+        compactLabel = "▤",
+    ),
+    VelaTopLevelDestination(
+        route = VelaRoutes.AiSchedule,
+        label = "AI 日程",
+        compactLabel = "AI",
     ),
 )
