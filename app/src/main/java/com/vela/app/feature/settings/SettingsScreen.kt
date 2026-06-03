@@ -69,10 +69,6 @@ class SettingsViewModel : ViewModel() {
         updateAiConfig(visionModel = model)
     }
 
-    fun updateAiDocumentModel(model: String) {
-        updateAiConfig(documentModel = model)
-    }
-
     fun updateAiVoiceModel(model: String) {
         updateAiConfig(voiceModel = model)
     }
@@ -82,7 +78,6 @@ class SettingsViewModel : ViewModel() {
         apiKey: String = preferences.value.aiApiKey,
         textModel: String = preferences.value.aiTextModel,
         visionModel: String = preferences.value.aiVisionModel,
-        documentModel: String = preferences.value.aiDocumentModel,
         voiceModel: String = preferences.value.aiVoiceModel,
     ) {
         repository.updateAiServiceConfig(
@@ -90,7 +85,6 @@ class SettingsViewModel : ViewModel() {
             apiKey = apiKey,
             textModel = textModel,
             visionModel = visionModel,
-            documentModel = documentModel,
             voiceModel = voiceModel,
         )
     }
@@ -166,7 +160,7 @@ fun SettingsScreen(
             item {
                 SettingsSection(
                     title = "AI 服务",
-                    description = "兼容中转平台的 OpenAI Chat Completions 接口。文本、图片、文档可分别配置模型；语音入口暂未接入录音转写。",
+                    description = "兼容中转平台的 OpenAI Chat Completions 和 Audio Transcriptions 接口。语音会先转文字，再复用文本解析。",
                 ) {
                     OutlinedTextField(
                         modifier = Modifier.fillMaxWidth(),
@@ -202,18 +196,10 @@ fun SettingsScreen(
                     )
                     OutlinedTextField(
                         modifier = Modifier.fillMaxWidth(),
-                        value = preferences.aiDocumentModel,
-                        onValueChange = viewModel::updateAiDocumentModel,
-                        label = { Text(text = "文档解析模型") },
-                        placeholder = { Text(text = "例如 gemini-2.5-flash") },
-                        singleLine = true,
-                    )
-                    OutlinedTextField(
-                        modifier = Modifier.fillMaxWidth(),
                         value = preferences.aiVoiceModel,
                         onValueChange = viewModel::updateAiVoiceModel,
-                        label = { Text(text = "语音转文字模型（预留）") },
-                        placeholder = { Text(text = "例如 whisper / asr 模型") },
+                        label = { Text(text = "语音转文字模型") },
+                        placeholder = { Text(text = "例如 whisper-1 / gpt-4o-mini-transcribe") },
                         singleLine = true,
                     )
                     Text(
@@ -283,7 +269,7 @@ private fun updateWeatherFromDeviceLocation(
         latitude = location.latitude,
         longitude = location.longitude,
     )
-    return "已用当前定位刷新天气。"
+    return "已保存当前定位，天气正在后台刷新。"
 }
 
 private fun Context.hasLocationPermission(): Boolean =

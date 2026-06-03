@@ -3,6 +3,7 @@ package com.vela.app.navigation
 object VelaRoutes {
     const val Calendar = "calendar"
     const val Schedule = "schedule"
+    const val Activity = "activity/{date}"
     const val AiSchedule = "ai/schedule"
     const val ImportChat = AiSchedule
     const val SmartEdit = "smart/edit"
@@ -10,6 +11,8 @@ object VelaRoutes {
     const val Event = "event/{eventId}"
 
     fun event(eventId: String): String = "event/$eventId"
+
+    fun activity(date: String): String = "activity/$date"
 }
 
 data class VelaTopLevelDestination(

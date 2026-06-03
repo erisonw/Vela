@@ -40,14 +40,11 @@ data class AiInputAttachment(
     val fileName: String,
     val mimeType: String,
     val base64Data: String? = null,
-    val textContent: String? = null,
 )
 
 enum class AiInputType {
     Text,
     Image,
-    File,
-    Voice,
 }
 
 sealed interface AiExtractionResult {
@@ -72,8 +69,6 @@ class HttpAiExtractionClient(
     private val apiKey: String,
     private val textModel: String,
     private val visionModel: String,
-    private val documentModel: String,
-    private val voiceModel: String,
 ) : AiExtractionClient {
     private val json = Json {
         encodeDefaults = true
@@ -84,9 +79,6 @@ class HttpAiExtractionClient(
         val serviceUrl = endpoint.toServiceUrl()
         if (serviceUrl.isBlank()) {
             return missingConfigFailure()
-        }
-        if (request.type == AiInputType.Voice) {
-            return unsupportedVoiceFailure()
         }
         val model = modelFor(request)
         if (model.isBlank()) {
@@ -321,19 +313,6 @@ class HttpAiExtractionClient(
             message = when (type) {
                 AiInputType.Text -> "文本解析模型未配置，请先在设置中填写文本模型。"
                 AiInputType.Image -> "图片识别模型未配置，请先在设置中填写图片模型。"
-                AiInputType.File -> "文档解析模型未配置，请先在设置中填写文档模型。"
-                AiInputType.Voice -> "语音转文字模型未配置，请先在设置中填写语音模型。"
-            },
-            retryable = true,
-        )
-
-    private fun unsupportedVoiceFailure(): AiExtractionResult.Failure =
-        AiExtractionResult.Failure(
-            code = "VOICE_NOT_READY",
-            message = if (voiceModel.isBlank()) {
-                "语音转文字模型未配置，请先在设置中填写语音模型。"
-            } else {
-                "语音转文字服务暂不可用，请稍后重试。"
             },
             retryable = true,
         )
@@ -349,12 +328,6 @@ class HttpAiExtractionClient(
         when (request.type) {
             AiInputType.Text -> textModel
             AiInputType.Image -> visionModel
-            AiInputType.File -> if (request.attachments.any { !it.base64Data.isNullOrBlank() }) {
-                visionModel.ifBlank { documentModel }
-            } else {
-                documentModel
-            }
-            AiInputType.Voice -> voiceModel
         }.trim()
 
     private fun AiExtractionRequest.validateAttachments(): AiExtractionResult.Failure? =
@@ -369,16 +342,6 @@ class HttpAiExtractionClient(
             } else {
                 null
             }
-            AiInputType.File -> if (attachments.none { it.hasReadableContent() }) {
-                AiExtractionResult.Failure(
-                    code = "FILE_CONTENT_EMPTY",
-                    message = "文件内容读取失败，请重新选择文档。",
-                    retryable = true,
-                )
-            } else {
-                null
-            }
-            AiInputType.Voice -> null
         }
 }
 
@@ -396,14 +359,14 @@ private fun extractionSystemPrompt(): String =
               "timezone": "Asia/Shanghai",
               "location": {"name": "地点"},
               "description": "备注",
-              "sourceEvidence": "从原文、图片或文档中提取该日程的依据",
+              "sourceEvidence": "从原文或图片中提取该日程的依据",
               "confidence": 0.85,
               "missingFields": ["结束时间", "地点"]
             }
           ]
         }
         必须使用带 +08:00 偏移的 ISO 8601 时间。无法确定标题或开始时间时，不要生成候选。
-        如果输入是图片或文档，请只提取其中真实出现或能明确推断的日程，不要补造不存在的信息。
+        如果输入是图片，请只提取其中真实出现或能明确推断的日程，不要补造不存在的信息。
     """.trimIndent()
 
 private fun AiExtractionRequest.toOpenAiUserContent(): JsonElement {
@@ -430,25 +393,6 @@ private fun AiExtractionRequest.toOpenAiUserContent(): JsonElement {
                 }
             }
         }
-        AiInputType.File -> buildJsonArray {
-            addTextContentBlock("$prompt\n请识别文档里的日程、课程表、会议或待办时间信息。")
-            attachments.forEach { attachment ->
-                val extractedText = attachment.textContent?.takeIf { it.isNotBlank() }
-                if (extractedText != null) {
-                    addTextContentBlock(
-                        """
-                            文档：${attachment.fileName}
-                            MIME：${attachment.mimeType}
-                            已提取文本：
-                            $extractedText
-                        """.trimIndent(),
-                    )
-                } else if (!attachment.base64Data.isNullOrBlank()) {
-                    addFileContentBlock(attachment)
-                }
-            }
-        }
-        AiInputType.Voice -> JsonPrimitive(prompt)
     }
 }
 
@@ -496,37 +440,15 @@ private fun kotlinx.serialization.json.JsonArrayBuilder.addImageContentBlock(
     )
 }
 
-private fun kotlinx.serialization.json.JsonArrayBuilder.addFileContentBlock(
-    attachment: AiInputAttachment,
-) {
-    add(
-        buildJsonObject {
-            put("type", "file")
-            put(
-                "file",
-                buildJsonObject {
-                    put("filename", attachment.fileName)
-                    put("file_data", attachment.toDataUrl())
-                },
-            )
-        },
-    )
-}
-
 private fun AiInputAttachment.toDataUrl(): String {
     val cleanMimeType = mimeType.ifBlank { "application/octet-stream" }
     return "data:$cleanMimeType;base64,${base64Data.orEmpty()}"
 }
 
-private fun AiInputAttachment.hasReadableContent(): Boolean =
-    !textContent.isNullOrBlank() || !base64Data.isNullOrBlank()
-
 private fun AiInputType.toChineseLabel(): String =
     when (this) {
         AiInputType.Text -> "文本"
         AiInputType.Image -> "图片"
-        AiInputType.File -> "文档"
-        AiInputType.Voice -> "语音"
     }
 
 private fun String.extractJsonObjectText(): String {
@@ -612,8 +534,6 @@ object UnavailableAiExtractionClient : AiExtractionClient {
             message = when (request.type) {
                 AiInputType.Text -> "连接失败请重试。当前未生成候选日程，可以到「日程」里本地新建。"
                 AiInputType.Image -> "图片识别服务暂不可用，请稍后重试，或到「日程」里本地新建。"
-                AiInputType.File -> "文件识别服务暂不可用，请稍后重试，或到「日程」里本地新建。"
-                AiInputType.Voice -> "语音转文字服务暂不可用，请稍后重试。"
             },
             retryable = true,
         )

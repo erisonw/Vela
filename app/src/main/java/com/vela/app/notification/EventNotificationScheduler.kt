@@ -19,11 +19,14 @@ object EventNotificationScheduler {
     const val ChannelId = "vela_event_reminders"
     private const val ChannelName = "日程提醒"
     private const val ActionEventReminder = "com.vela.app.action.EVENT_REMINDER"
+    private const val ActionEventAdvicePrepare = "com.vela.app.action.EVENT_ADVICE_PREPARE"
     private const val ExtraEventId = "event_id"
+    private const val ExtraEventDate = "event_date"
     private const val ExtraTitle = "title"
     private const val ExtraTime = "time"
     private const val ExtraLocation = "location"
     private const val ExtraReminderText = "reminder_text"
+    private const val AdvicePreparationLeadMinutes = 5L
     private val TimeFormatter = DateTimeFormatter.ofPattern("MM-dd HH:mm", Locale.CHINA)
 
     fun ensureChannel(context: Context) {
@@ -76,6 +79,16 @@ object EventNotificationScheduler {
                 alarmManager.cancel(pendingIntent)
                 pendingIntent.cancel()
             }
+            val preparePendingIntent = advicePreparePendingIntent(
+                context = context,
+                eventId = eventId,
+                minutesBefore = minutesBefore,
+                flags = PendingIntent.FLAG_NO_CREATE or PendingIntent.FLAG_IMMUTABLE,
+            )
+            if (preparePendingIntent != null) {
+                alarmManager.cancel(preparePendingIntent)
+                preparePendingIntent.cancel()
+            }
         }
     }
 
@@ -89,6 +102,7 @@ object EventNotificationScheduler {
         if (triggerAtMillis <= System.currentTimeMillis()) {
             return
         }
+        scheduleAdvicePreparation(context, event, reminder, triggerAtMillis)
         val alarmManager = context.getSystemService(AlarmManager::class.java)
         val pendingIntent = scheduledPendingIntent(
             context = context,
@@ -113,6 +127,40 @@ object EventNotificationScheduler {
         }
     }
 
+    private fun scheduleAdvicePreparation(
+        context: Context,
+        event: Event,
+        reminder: Reminder,
+        reminderTriggerAtMillis: Long,
+    ) {
+        val prepareAtMillis = reminderTriggerAtMillis - AdvicePreparationLeadMinutes * 60_000
+        val intent = buildAdvicePrepareIntent(context, event)
+        if (prepareAtMillis <= System.currentTimeMillis()) {
+            context.sendBroadcast(intent)
+            return
+        }
+        val pendingIntent = PendingIntent.getBroadcast(
+            context,
+            advicePrepareRequestCode(event.id, reminder.minutesBefore),
+            intent,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+        )
+        val alarmManager = context.getSystemService(AlarmManager::class.java)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+            alarmManager.setAndAllowWhileIdle(
+                AlarmManager.RTC_WAKEUP,
+                prepareAtMillis,
+                pendingIntent,
+            )
+        } else {
+            alarmManager.set(
+                AlarmManager.RTC_WAKEUP,
+                prepareAtMillis,
+                pendingIntent,
+            )
+        }
+    }
+
     private fun reminderPendingIntent(
         context: Context,
         eventId: String,
@@ -126,6 +174,24 @@ object EventNotificationScheduler {
         return PendingIntent.getBroadcast(
             context,
             requestCode(eventId, minutesBefore),
+            intent,
+            flags,
+        )
+    }
+
+    private fun advicePreparePendingIntent(
+        context: Context,
+        eventId: String,
+        minutesBefore: Int,
+        flags: Int,
+    ): PendingIntent? {
+        val intent = Intent(context, EventAdvicePrepareReceiver::class.java).apply {
+            action = ActionEventAdvicePrepare
+            putExtra(ExtraEventId, eventId)
+        }
+        return PendingIntent.getBroadcast(
+            context,
+            advicePrepareRequestCode(eventId, minutesBefore),
             intent,
             flags,
         )
@@ -149,16 +215,28 @@ object EventNotificationScheduler {
         Intent(context, EventReminderReceiver::class.java).apply {
             action = ActionEventReminder
             putExtra(ExtraEventId, event.id)
+            putExtra(ExtraEventDate, event.startAt.toDisplayDate())
             putExtra(ExtraTitle, event.title)
             putExtra(ExtraTime, event.startAt.toDisplayTime())
             putExtra(ExtraLocation, event.location?.name.orEmpty())
             putExtra(ExtraReminderText, reminder.label ?: reminderLabel(reminder.minutesBefore))
         }
 
+    private fun buildAdvicePrepareIntent(context: Context, event: Event): Intent =
+        Intent(context, EventAdvicePrepareReceiver::class.java).apply {
+            action = ActionEventAdvicePrepare
+            putExtra(ExtraEventId, event.id)
+        }
+
     fun requestCode(eventId: String, minutesBefore: Int): Int =
         31 * eventId.hashCode() + minutesBefore
 
+    fun advicePrepareRequestCode(eventId: String, minutesBefore: Int): Int =
+        requestCode(eventId, minutesBefore) xor 0x51A7
+
     fun eventIdFrom(intent: Intent): String? = intent.getStringExtra(ExtraEventId)
+
+    fun eventDateFrom(intent: Intent): String = intent.getStringExtra(ExtraEventDate).orEmpty()
 
     fun titleFrom(intent: Intent): String = intent.getStringExtra(ExtraTitle).orEmpty()
 
@@ -180,4 +258,9 @@ object EventNotificationScheduler {
         runCatching {
             OffsetDateTime.parse(this).format(TimeFormatter)
         }.getOrDefault(this)
+
+    private fun String.toDisplayDate(): String =
+        runCatching {
+            OffsetDateTime.parse(this).toLocalDate().toString()
+        }.getOrDefault(substringBefore("T"))
 }

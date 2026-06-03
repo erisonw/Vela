@@ -4,6 +4,7 @@
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
     <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.RECORD_AUDIO" />
     <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
     <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
 
@@ -76,6 +77,18 @@
                 <category android:name="android.intent.category.BROWSABLE" />
 
                 <data
+                    android:host="activity"
+                    android:pathPattern="/.*"
+                    android:scheme="vela" />
+            </intent-filter>
+
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+
+                <data
                     android:host="smart"
                     android:path="/edit"
                     android:scheme="vela" />
@@ -96,6 +109,10 @@
 
         <receiver
             android:name=".notification.EventReminderReceiver"
+            android:exported="false" />
+
+        <receiver
+            android:name=".notification.EventAdvicePrepareReceiver"
             android:exported="false" />
 
         <receiver

@@ -7,7 +7,6 @@ data class UserPreferences(
     val aiApiKey: String = "",
     val aiTextModel: String = "",
     val aiVisionModel: String = "",
-    val aiDocumentModel: String = "",
     val aiVoiceModel: String = "",
     val weatherLatitude: Double? = null,
     val weatherLongitude: Double? = null,

@@ -1,7 +1,11 @@
 .DS_Store
+.idea/
+dist/
+*.hprof
 
 # Android / Gradle generated files
 .gradle/
 build/
 app/build/
 local.properties
+gradle/gradle-daemon-jvm.properties

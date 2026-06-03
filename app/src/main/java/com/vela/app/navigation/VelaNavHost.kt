@@ -20,6 +20,7 @@ import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
 import androidx.navigation.navDeepLink
+import com.vela.app.feature.activity.ActivityScreen
 import com.vela.app.feature.calendar.CalendarScreen
 import com.vela.app.feature.home.HomeScreen
 import com.vela.app.feature.importchat.ImportChatScreen
@@ -32,15 +33,20 @@ fun VelaNavHost() {
     val currentDestination = backStackEntry?.destination
     val currentRoute = currentDestination?.route
     val topLevelRoute = when (currentRoute) {
-        VelaRoutes.Calendar -> VelaRoutes.Calendar
+        VelaRoutes.Calendar, VelaRoutes.Activity -> VelaRoutes.Calendar
         VelaRoutes.Schedule, VelaRoutes.Event, "home" -> VelaRoutes.Schedule
         VelaRoutes.AiSchedule, VelaRoutes.SmartEdit -> VelaRoutes.AiSchedule
         else -> null
     }
+    val shouldShowBottomBar = currentRoute !in setOf(
+        VelaRoutes.Settings,
+        VelaRoutes.AiSchedule,
+        VelaRoutes.SmartEdit,
+    )
 
     Scaffold(
         bottomBar = {
-            if (currentRoute != VelaRoutes.Settings) {
+            if (shouldShowBottomBar) {
                 NavigationBar(
                     containerColor = Color.White.copy(alpha = 0.96f),
                     tonalElevation = NavigationBarDefaults.Elevation,
@@ -100,7 +106,20 @@ fun VelaNavHost() {
                     route = VelaRoutes.Calendar,
                 ) {
                     CalendarScreen(
-                        onScheduleClick = { navController.navigate(VelaRoutes.Schedule) },
+                        onActivityDateClick = { date ->
+                            navController.navigate(VelaRoutes.activity(date.toString()))
+                        },
+                    )
+                }
+
+                composable(
+                    route = VelaRoutes.Activity,
+                    arguments = listOf(navArgument("date") { type = NavType.StringType }),
+                    deepLinks = listOf(navDeepLink { uriPattern = "vela://activity/{date}" }),
+                ) { activityBackStackEntry ->
+                    ActivityScreen(
+                        dateText = activityBackStackEntry.arguments?.getString("date").orEmpty(),
+                        onEventClick = { eventId -> navController.navigate(VelaRoutes.event(eventId)) },
                     )
                 }
 
