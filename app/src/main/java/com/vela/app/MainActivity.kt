@@ -8,13 +8,14 @@ import com.vela.app.data.mock.MockVelaRepository
 import com.vela.app.navigation.VelaNavHost
 import com.vela.app.ui.theme.VelaTheme
 import com.vela.app.widget.VelaWidgetUpdater
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         MockVelaRepository.initialize(this)
-        lifecycleScope.launch {
+        lifecycleScope.launch(Dispatchers.IO) {
             VelaWidgetUpdater.updateAll(this@MainActivity)
         }
         setContent {

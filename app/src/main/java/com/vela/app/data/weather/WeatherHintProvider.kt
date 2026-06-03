@@ -6,7 +6,6 @@ import kotlinx.serialization.decodeFromString
 import kotlinx.serialization.json.Json
 import java.net.HttpURLConnection
 import java.net.URL
-import kotlin.concurrent.thread
 
 data class WeatherHint(
     val weatherHint: String,
@@ -32,7 +31,7 @@ object WeatherHintProvider {
         ignoreUnknownKeys = true
     }
 
-    fun forCoordinates(latitude: Double?, longitude: Double?): WeatherHint {
+    fun pendingForCoordinates(latitude: Double?, longitude: Double?): WeatherHint {
         if (latitude == null || longitude == null) {
             return WeatherHint(
                 weatherHint = "定位后获取天气",
@@ -42,12 +41,20 @@ object WeatherHintProvider {
             )
         }
 
-        var result: WeatherHint? = null
-        val worker = thread(name = "vela-weather") {
-            result = requestOpenMeteo(latitude, longitude)
+        return WeatherHint(
+            weatherHint = "天气更新中",
+            prepHint = "天气刷新不影响查看日程",
+            statusText = "已保存定位，正在后台刷新天气",
+            riskType = WeatherRiskType.None,
+        )
+    }
+
+    fun forCoordinates(latitude: Double?, longitude: Double?): WeatherHint {
+        if (latitude == null || longitude == null) {
+            return pendingForCoordinates(latitude, longitude)
         }
-        worker.join()
-        return result ?: WeatherHint(
+
+        return requestOpenMeteo(latitude, longitude) ?: WeatherHint(
             weatherHint = "天气待获取",
             prepHint = "天气服务连接失败",
             statusText = "Open-Meteo 暂未返回天气，稍后可重试",

@@ -2,28 +2,23 @@ package com.vela.app.feature.importchat
 
 import android.Manifest
 import android.content.Context
-import android.graphics.Bitmap
-import android.graphics.pdf.PdfRenderer
+import android.content.pm.PackageManager
+import android.media.MediaRecorder
 import android.net.Uri
-import android.os.ParcelFileDescriptor
 import android.provider.OpenableColumns
 import androidx.compose.foundation.background
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.compose.foundation.Image
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -35,6 +30,8 @@ import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
@@ -42,6 +39,8 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.rememberCoroutineScope
@@ -49,9 +48,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
@@ -62,6 +59,8 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewModelScope
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.vela.app.data.ai.AiInputAttachment
+import com.vela.app.data.ai.AiVoiceRecording
+import com.vela.app.data.ai.VoiceTranscriptionResult
 import com.vela.app.data.model.ChatMessage
 import com.vela.app.data.model.ChatMessageRole
 import com.vela.app.data.mock.MockVelaRepository
@@ -74,6 +73,7 @@ import com.vela.app.data.model.remindersFromPreset
 import com.vela.app.data.model.selectedReminderMinutes
 import com.vela.app.data.model.validateEventInput
 import com.vela.app.data.repository.ImportResult
+import com.vela.app.data.repository.ImportSubmissionResult
 import com.vela.app.notification.NotificationPermissionState
 import com.vela.app.ui.ReminderSelector
 import com.vela.app.ui.showDateTimePicker
@@ -85,10 +85,10 @@ import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import java.io.ByteArrayOutputStream
+import java.io.File
 import java.time.OffsetDateTime
 import java.time.format.DateTimeFormatter
 import java.util.Base64
-import java.util.zip.ZipInputStream
 
 data class ImportChatUiState(
     val session: ImportSession? = null,
@@ -97,6 +97,10 @@ data class ImportChatUiState(
     val userPreferences: UserPreferences = UserPreferences(),
     val isSubmittingAttachment: Boolean = false,
     val attachmentErrorText: String? = null,
+    val inputErrorText: String? = null,
+    val isTranscribingVoice: Boolean = false,
+    val voiceErrorText: String? = null,
+    val voiceTranscriptText: String? = null,
 ) {
     private val activeCandidates = candidates.filterNot {
         it.reviewStatus == EventCandidateReviewStatus.Rejected ||
@@ -136,9 +140,25 @@ data class HighlightedImportDate(
     val selectedCount: Int,
 )
 
+private data class InputSubmissionState(
+    val isSubmittingAttachment: Boolean = false,
+    val attachmentErrorText: String? = null,
+    val inputErrorText: String? = null,
+    val isTranscribingVoice: Boolean = false,
+    val voiceErrorText: String? = null,
+    val voiceTranscriptText: String? = null,
+)
+
 private data class AttachmentSubmissionState(
-    val isSubmitting: Boolean = false,
-    val errorText: String? = null,
+    val isSubmittingAttachment: Boolean = false,
+    val attachmentErrorText: String? = null,
+    val inputErrorText: String? = null,
+)
+
+private data class VoiceSubmissionState(
+    val isTranscribingVoice: Boolean = false,
+    val voiceErrorText: String? = null,
+    val voiceTranscriptText: String? = null,
 )
 
 class ImportChatViewModel : ViewModel() {
@@ -146,14 +166,46 @@ class ImportChatViewModel : ViewModel() {
     private val _lastImportResult = kotlinx.coroutines.flow.MutableStateFlow<ImportResult?>(null)
     private val _isSubmittingAttachment = kotlinx.coroutines.flow.MutableStateFlow(false)
     private val _attachmentErrorText = kotlinx.coroutines.flow.MutableStateFlow<String?>(null)
+    private val _inputErrorText = kotlinx.coroutines.flow.MutableStateFlow<String?>(null)
+    private val _isTranscribingVoice = kotlinx.coroutines.flow.MutableStateFlow(false)
+    private val _voiceErrorText = kotlinx.coroutines.flow.MutableStateFlow<String?>(null)
+    private val _voiceTranscriptText = kotlinx.coroutines.flow.MutableStateFlow<String?>(null)
 
     private val attachmentSubmissionState = combine(
         _isSubmittingAttachment,
         _attachmentErrorText,
-    ) { isSubmitting, errorText ->
+        _inputErrorText,
+    ) { isSubmittingAttachment, attachmentErrorText, inputErrorText ->
         AttachmentSubmissionState(
-            isSubmitting = isSubmitting,
-            errorText = errorText,
+            isSubmittingAttachment = isSubmittingAttachment,
+            attachmentErrorText = attachmentErrorText,
+            inputErrorText = inputErrorText,
+        )
+    }
+
+    private val voiceSubmissionState = combine(
+        _isTranscribingVoice,
+        _voiceErrorText,
+        _voiceTranscriptText,
+    ) { isTranscribingVoice, voiceErrorText, voiceTranscriptText ->
+        VoiceSubmissionState(
+            isTranscribingVoice = isTranscribingVoice,
+            voiceErrorText = voiceErrorText,
+            voiceTranscriptText = voiceTranscriptText,
+        )
+    }
+
+    private val inputSubmissionState = combine(
+        attachmentSubmissionState,
+        voiceSubmissionState,
+    ) { attachmentState, voiceState ->
+        InputSubmissionState(
+            isSubmittingAttachment = attachmentState.isSubmittingAttachment,
+            attachmentErrorText = attachmentState.attachmentErrorText,
+            inputErrorText = attachmentState.inputErrorText,
+            isTranscribingVoice = voiceState.isTranscribingVoice,
+            voiceErrorText = voiceState.voiceErrorText,
+            voiceTranscriptText = voiceState.voiceTranscriptText,
         )
     }
 
@@ -162,15 +214,19 @@ class ImportChatViewModel : ViewModel() {
         repository.eventCandidates,
         _lastImportResult,
         repository.userPreferences,
-        attachmentSubmissionState,
-    ) { session, candidates, lastImportResult, userPreferences, attachmentState ->
+        inputSubmissionState,
+    ) { session, candidates, lastImportResult, userPreferences, inputState ->
         ImportChatUiState(
             session = session,
             candidates = candidates,
             lastImportResult = lastImportResult,
             userPreferences = userPreferences,
-            isSubmittingAttachment = attachmentState.isSubmitting,
-            attachmentErrorText = attachmentState.errorText,
+            isSubmittingAttachment = inputState.isSubmittingAttachment,
+            attachmentErrorText = inputState.attachmentErrorText,
+            inputErrorText = inputState.inputErrorText,
+            isTranscribingVoice = inputState.isTranscribingVoice,
+            voiceErrorText = inputState.voiceErrorText,
+            voiceTranscriptText = inputState.voiceTranscriptText,
         )
     }.stateIn(
         scope = viewModelScope,
@@ -179,42 +235,27 @@ class ImportChatViewModel : ViewModel() {
     )
 
     fun submitText(text: String) {
-        repository.submitImportText(text)
-        _lastImportResult.value = null
-        _attachmentErrorText.value = null
-    }
-
-    fun submitImage(context: Context, uri: Uri) {
-        submitAttachment(context = context, uri = uri, isImage = true)
-    }
-
-    fun submitFile(context: Context, uri: Uri) {
         viewModelScope.launch(Dispatchers.IO) {
-            _isSubmittingAttachment.value = true
+            val result = repository.submitImportText(text)
+            _lastImportResult.value = null
             _attachmentErrorText.value = null
-            runCatching {
-                context.toDocumentAiInputAttachments(uri)
-            }.onSuccess { attachments ->
-                repository.submitImportFile(attachments)
-                _lastImportResult.value = null
-            }.onFailure { throwable ->
-                _attachmentErrorText.value = throwable.message?.takeIf { it.isNotBlank() }
-                    ?: "文档读取失败，请重新选择。"
-            }
-            _isSubmittingAttachment.value = false
+            _inputErrorText.value = result.compactFailureMessage()
+            _voiceErrorText.value = null
         }
     }
 
-    fun submitVoice() {
-        repository.submitImportVoice()
-        _lastImportResult.value = null
-        _attachmentErrorText.value = null
+    fun submitImage(context: Context, uri: Uri) {
+        submitAttachment(context = context, uri = uri)
     }
 
     fun submitEditInstruction(instruction: String) {
-        repository.submitNaturalLanguageEdit(instruction)
-        _lastImportResult.value = null
-        _attachmentErrorText.value = null
+        viewModelScope.launch(Dispatchers.IO) {
+            val result = repository.submitNaturalLanguageEdit(instruction)
+            _lastImportResult.value = null
+            _attachmentErrorText.value = null
+            _inputErrorText.value = result.compactFailureMessage()
+            _voiceErrorText.value = null
+        }
     }
 
     fun toggleCandidate(candidateId: String) {
@@ -244,36 +285,78 @@ class ImportChatViewModel : ViewModel() {
         return result
     }
 
-    private fun submitAttachment(
-        context: Context,
-        uri: Uri,
-        isImage: Boolean,
-    ) {
+    private fun submitAttachment(context: Context, uri: Uri) {
         viewModelScope.launch(Dispatchers.IO) {
             _isSubmittingAttachment.value = true
             _attachmentErrorText.value = null
+            _inputErrorText.value = null
+            _voiceErrorText.value = null
             runCatching {
-                context.toAiInputAttachment(uri = uri, isImage = isImage)
+                context.toAiInputAttachment(uri = uri)
             }.onSuccess { attachment ->
-                if (isImage) {
-                    repository.submitImportImage(attachment)
-                }
+                val result = repository.submitImportImage(attachment)
                 _lastImportResult.value = null
+                _inputErrorText.value = result.compactFailureMessage()
             }.onFailure {
-                _attachmentErrorText.value = if (isImage) {
-                    "图片读取失败，请重新选择。"
-                } else {
-                    "文档读取失败，请重新选择。"
-                }
+                _attachmentErrorText.value = "图片读取失败，请重新选择。"
             }
             _isSubmittingAttachment.value = false
         }
+    }
+
+    fun transcribeVoiceRecording(recordingFile: File) {
+        viewModelScope.launch(Dispatchers.IO) {
+            _isTranscribingVoice.value = true
+            _voiceErrorText.value = null
+            _voiceTranscriptText.value = null
+            runCatching {
+                recordingFile.readBytes()
+            }.onSuccess { bytes ->
+                when (
+                    val result = repository.transcribeVoice(
+                        AiVoiceRecording(
+                            fileName = recordingFile.name,
+                            mimeType = "audio/mp4",
+                            bytes = bytes,
+                        ),
+                    )
+                ) {
+                    is VoiceTranscriptionResult.Success -> {
+                        _voiceTranscriptText.value = result.text
+                    }
+
+                    is VoiceTranscriptionResult.Failure -> {
+                        _voiceErrorText.value = result.message
+                    }
+                }
+            }.onFailure {
+                _voiceErrorText.value = "录音读取失败，请重新录音。"
+            }
+            recordingFile.delete()
+            _isTranscribingVoice.value = false
+        }
+    }
+
+    fun clearVoiceTranscript() {
+        _voiceTranscriptText.value = null
+    }
+}
+
+private fun ImportSubmissionResult.compactFailureMessage(): String? {
+    if (isSuccess) return null
+    return when {
+        message.contains("请输入") -> message
+        message.contains("图片") -> "图片识别失败，请重试。"
+        message.contains("未配置") -> "AI 服务未配置。"
+        message.contains("自然语言修改") -> "暂不能修改，请稍后再试。"
+        message.contains("连接失败") -> "连接失败，请重试。"
+        message.contains("无法解析") || message.contains("没有返回") -> "识别失败，请重试。"
+        else -> message.substringBefore("。").ifBlank { "识别失败，请重试" } + "。"
     }
 }
 
 @Composable
 fun ImportChatScreen(
-    @Suppress("UNUSED_PARAMETER")
     onCalendarClick: () -> Unit,
     onScheduleClick: () -> Unit,
     onSettingsClick: () -> Unit,
@@ -287,10 +370,86 @@ fun ImportChatScreen(
     var areAllCandidatesExpanded by remember { mutableStateOf(false) }
     var selectedDateFilter by remember { mutableStateOf<String?>(null) }
     var notificationPermissionDenied by remember { mutableStateOf(false) }
+    var voiceStatusText by remember { mutableStateOf<String?>(null) }
+    var isVoiceStatusError by remember { mutableStateOf(false) }
+    var isVoiceRecording by remember { mutableStateOf(false) }
+    var voiceRecorder by remember { mutableStateOf<MediaRecorder?>(null) }
+    var voiceRecordingFile by remember { mutableStateOf<File?>(null) }
     val notificationPermissionLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestPermission(),
     ) { granted ->
         notificationPermissionDenied = !granted
+    }
+    DisposableEffect(Unit) {
+        onDispose {
+            runCatching { voiceRecorder?.release() }
+            voiceRecordingFile?.delete()
+        }
+    }
+    LaunchedEffect(uiState.voiceTranscriptText) {
+        val transcript = uiState.voiceTranscriptText?.trim().orEmpty()
+        if (transcript.isNotBlank()) {
+            inputText = if (inputText.isBlank()) {
+                transcript
+            } else {
+                "${inputText.trim()} $transcript"
+            }
+            voiceStatusText = null
+            isVoiceStatusError = false
+            viewModel.clearVoiceTranscript()
+        }
+    }
+
+    fun startVoiceRecording() {
+        if (uiState.isTranscribingVoice) {
+            voiceStatusText = "正在转写上一段语音，请稍等。"
+            isVoiceStatusError = false
+            return
+        }
+        val recordingFile = context.createVoiceRecordingFile()
+        runCatching {
+            val recorder = createVoiceRecorder(recordingFile)
+            voiceRecorder = recorder
+            voiceRecordingFile = recordingFile
+            isVoiceRecording = true
+            voiceStatusText = null
+            isVoiceStatusError = false
+        }.onFailure {
+            runCatching { voiceRecorder?.release() }
+            voiceRecorder = null
+            voiceRecordingFile = null
+            recordingFile.delete()
+            isVoiceRecording = false
+            voiceStatusText = "录音启动失败，请检查麦克风权限后再试。"
+            isVoiceStatusError = true
+        }
+    }
+
+    fun stopVoiceRecording() {
+        val recorder = voiceRecorder
+        val recordingFile = voiceRecordingFile
+        voiceRecorder = null
+        voiceRecordingFile = null
+        isVoiceRecording = false
+        val stopped = runCatching {
+            recorder?.stop()
+            true
+        }.getOrDefault(false)
+        runCatching { recorder?.release() }
+        if (
+            !stopped ||
+            recordingFile == null ||
+            !recordingFile.exists() ||
+            recordingFile.length() < MinVoiceRecordingBytes
+        ) {
+            recordingFile?.delete()
+            voiceStatusText = "录音太短或未保存成功，请重新录音。"
+            isVoiceStatusError = true
+            return
+        }
+        voiceStatusText = null
+        isVoiceStatusError = false
+        viewModel.transcribeVoiceRecording(recordingFile)
     }
     val imagePickerLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.GetContent(),
@@ -299,17 +458,32 @@ fun ImportChatScreen(
             viewModel.submitImage(context, uri)
         }
     }
-    val filePickerLauncher = rememberLauncherForActivityResult(
-        ActivityResultContracts.GetContent(),
-    ) { uri ->
-        if (uri != null) {
-            viewModel.submitFile(context, uri)
+    val voicePermissionLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestPermission(),
+    ) { granted ->
+        if (granted) {
+            startVoiceRecording()
+        } else {
+            voiceStatusText = "未获得麦克风权限，无法使用语音输入。"
+            isVoiceStatusError = true
         }
     }
 
     fun requestNotificationPermissionIfNeeded() {
         if (NotificationPermissionState.needsRuntimePermission(context)) {
             notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+        }
+    }
+
+    fun requestVoiceInput() {
+        if (isVoiceRecording) {
+            stopVoiceRecording()
+            return
+        }
+        if (context.hasAudioPermission()) {
+            startVoiceRecording()
+        } else {
+            voicePermissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
         }
     }
 
@@ -340,24 +514,21 @@ fun ImportChatScreen(
     ) {
         LazyColumn(
             modifier = Modifier.fillMaxSize(),
-            contentPadding = PaddingValues(start = 16.dp, top = 14.dp, end = 16.dp, bottom = 120.dp),
+            contentPadding = PaddingValues(start = 16.dp, top = 6.dp, end = 16.dp, bottom = 120.dp),
             verticalArrangement = Arrangement.spacedBy(10.dp),
         ) {
             item {
-                AiScheduleHeader(onSettingsClick = onSettingsClick)
-            }
-
-            if (uiState.visibleCandidates.isEmpty() && uiState.session?.messages.orEmpty().size <= 1) {
-                item {
-                    AiPlanPreviewCard()
-                }
-                item {
-                    AiSuggestionCard()
-                }
+                ChatImportHeader(
+                    onBackClick = onCalendarClick,
+                    onSettingsClick = onSettingsClick,
+                )
             }
 
             uiState.session?.messages?.let { messages ->
-                items(messages, key = { it.id }) { message ->
+                items(
+                    messages.filter { it.role == ChatMessageRole.User },
+                    key = { it.id },
+                ) { message ->
                     ChatBubble(message = message)
                 }
             }
@@ -372,14 +543,34 @@ fun ImportChatScreen(
                     InlineStatusText(text = errorText, isError = true)
                 }
             }
+            uiState.inputErrorText?.let { errorText ->
+                item {
+                    InlineStatusText(text = errorText, isError = true)
+                }
+            }
+            voiceStatusText?.let { statusText ->
+                item {
+                    InlineStatusText(text = statusText, isError = isVoiceStatusError)
+                }
+            }
+            uiState.voiceErrorText?.let { errorText ->
+                item {
+                    InlineStatusText(text = errorText, isError = true)
+                }
+            }
             if (uiState.isSubmittingAttachment) {
                 item {
-                    InlineStatusText(text = "正在识别文件...", isError = false)
+                    InlineStatusText(text = "正在识别...", isError = false)
+                }
+            }
+            if (uiState.isTranscribingVoice) {
+                item {
+                    InlineStatusText(text = "正在转写...", isError = false)
                 }
             }
             if (notificationPermissionDenied) {
                 item {
-                    InlineStatusText(text = "通知权限未开启，日程会保存，但系统提醒可能无法弹出。", isError = true)
+                    InlineStatusText(text = "通知权限未开启。", isError = true)
                 }
             }
             uiState.lastImportResult?.takeIf { it.isSuccess }?.let { result ->
@@ -417,8 +608,8 @@ fun ImportChatScreen(
             text = inputText,
             onTextChange = { inputText = it },
             onImageClick = { imagePickerLauncher.launch("image/*") },
-            onFileClick = { filePickerLauncher.launch("*/*") },
-            onVoiceLongPress = { viewModel.submitVoice() },
+            isVoiceRecording = isVoiceRecording,
+            onVoiceInput = ::requestVoiceInput,
             onSubmit = {
                 if (inputText.looksLikeEditInstruction()) {
                     viewModel.submitEditInstruction(inputText)
@@ -444,210 +635,33 @@ fun ImportChatScreen(
 }
 
 @Composable
-private fun AiScheduleHeader(onSettingsClick: () -> Unit) {
-    Surface(
+private fun ChatImportHeader(
+    onBackClick: () -> Unit,
+    onSettingsClick: () -> Unit,
+) {
+    Row(
         modifier = Modifier
             .fillMaxWidth()
-            .shadow(12.dp, RoundedCornerShape(30.dp)),
-        shape = RoundedCornerShape(30.dp),
-        color = Color(0xFFF4F7FF),
+            .padding(vertical = 4.dp),
+        verticalAlignment = Alignment.CenterVertically,
     ) {
-        Box {
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(18.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Column(
-                    modifier = Modifier.weight(1f),
-                    verticalArrangement = Arrangement.spacedBy(10.dp),
-                ) {
-                    Row(
-                        horizontalArrangement = Arrangement.spacedBy(6.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        Text(text = "◢", color = VelaPrimaryBlue, style = MaterialTheme.typography.titleMedium)
-                        Text(
-                            text = "Vela",
-                            color = VelaPrimaryBlue,
-                            style = MaterialTheme.typography.titleMedium,
-                            fontWeight = FontWeight.Bold,
-                        )
-                    }
-                    Text(
-                        text = "AI 日程",
-                        style = MaterialTheme.typography.headlineLarge,
-                        color = VelaTextPrimary,
-                        fontWeight = FontWeight.Bold,
-                    )
-                    Text(
-                        text = "AI 助手为你智能规划，高效安排每一天",
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = VelaTextSecondary,
-                    )
-                    Surface(
-                        modifier = Modifier.fillMaxWidth(),
-                        shape = RoundedCornerShape(24.dp),
-                        color = VelaPrimaryBlue,
-                    ) {
-                        Text(
-                            modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp),
-                            text = "输入自然语言创建",
-                            color = Color.White,
-                            style = MaterialTheme.typography.bodyMedium,
-                            fontWeight = FontWeight.SemiBold,
-                        )
-                    }
-                }
-                Spacer(modifier = Modifier.width(12.dp))
-                Image(
-                    modifier = Modifier.size(112.dp),
-                    painter = painterResource(id = R.mipmap.ic_launcher),
-                    contentDescription = "Vela",
-                )
-            }
-            TextButton(
-                modifier = Modifier.align(Alignment.TopEnd),
-                onClick = onSettingsClick,
-            ) {
-                Text(text = "设置")
-            }
+        IconButton(onClick = onBackClick) {
+            Icon(
+                painter = painterResource(id = R.drawable.ic_arrow_back_24),
+                contentDescription = "返回",
+                tint = Color.Black,
+            )
         }
-    }
-    Spacer(modifier = Modifier.height(4.dp))
-}
-
-@Composable
-private fun AiPlanPreviewCard() {
-    Surface(
-        modifier = Modifier
-            .fillMaxWidth()
-            .shadow(10.dp, RoundedCornerShape(24.dp)),
-        shape = RoundedCornerShape(24.dp),
-        color = Color.White,
-    ) {
-        Column(
-            modifier = Modifier.padding(18.dp),
-            verticalArrangement = Arrangement.spacedBy(14.dp),
-        ) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Column(modifier = Modifier.weight(1f)) {
-                    Text(
-                        text = "AI 日程安排",
-                        style = MaterialTheme.typography.titleMedium,
-                        color = VelaTextPrimary,
-                        fontWeight = FontWeight.Bold,
-                    )
-                    Text(
-                        text = "解析后会在这里生成可确认的候选日程",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = VelaTextSecondary,
-                    )
-                }
-                Surface(
-                    shape = RoundedCornerShape(12.dp),
-                    color = Color(0xFFEAF0FF),
-                ) {
-                    Text(
-                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp),
-                        text = "AI 生成",
-                        color = VelaPrimaryBlue,
-                        style = MaterialTheme.typography.labelSmall,
-                    )
-                }
-            }
-            listOf(
-                DemoPlanItem("07:30", "起床", "开启活力满满的一天", "30分钟", Color(0xFF3BA7FF)),
-                DemoPlanItem("09:00", "面试准备", "复习常见问题，准备材料", "60分钟", Color(0xFF8B5CF6)),
-                DemoPlanItem("10:00", "面试", "产品经理岗位面试", "60分钟", Color(0xFF2D6BFF)),
-                DemoPlanItem("13:00", "休息", "放松一下，调整状态", "30分钟", Color(0xFF8B5CF6)),
-            ).forEach { item ->
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(12.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Column(horizontalAlignment = Alignment.End) {
-                        Text(
-                            text = item.time,
-                            color = VelaTextPrimary,
-                            fontWeight = FontWeight.Bold,
-                            style = MaterialTheme.typography.bodyMedium,
-                        )
-                        Text(
-                            text = item.duration,
-                            color = VelaPrimaryBlue,
-                            style = MaterialTheme.typography.labelSmall,
-                        )
-                    }
-                    Box(
-                        modifier = Modifier
-                            .size(28.dp)
-                            .background(item.color.copy(alpha = 0.14f), CircleShape),
-                        contentAlignment = Alignment.Center,
-                    ) {
-                        Text(text = "•", color = item.color, fontWeight = FontWeight.Bold)
-                    }
-                    Column(modifier = Modifier.weight(1f)) {
-                        Text(
-                            text = item.title,
-                            color = VelaTextPrimary,
-                            fontWeight = FontWeight.Bold,
-                            style = MaterialTheme.typography.bodyMedium,
-                        )
-                        Text(
-                            text = item.subtitle,
-                            color = VelaTextSecondary,
-                            style = MaterialTheme.typography.bodySmall,
-                        )
-                    }
-                }
-            }
-            Text(
-                text = "AI 已为你优化时间安排，发送内容后可查看真实解析结果",
-                color = VelaTextSecondary,
-                style = MaterialTheme.typography.labelSmall,
+        Spacer(modifier = Modifier.weight(1f))
+        IconButton(onClick = onSettingsClick) {
+            Icon(
+                painter = painterResource(id = R.drawable.ic_settings_24),
+                contentDescription = "设置",
+                tint = Color.Black,
             )
         }
     }
 }
-
-@Composable
-private fun AiSuggestionCard() {
-    Surface(
-        modifier = Modifier
-            .fillMaxWidth()
-            .shadow(8.dp, RoundedCornerShape(24.dp)),
-        shape = RoundedCornerShape(24.dp),
-        color = Color(0xFFF7F3FF),
-    ) {
-        Column(
-            modifier = Modifier.padding(16.dp),
-            verticalArrangement = Arrangement.spacedBy(10.dp),
-        ) {
-            Text(
-                text = "AI 建议",
-                color = VelaPrimaryBlue,
-                style = MaterialTheme.typography.titleSmall,
-                fontWeight = FontWeight.Bold,
-            )
-            Text(
-                text = "告诉我你的目标，或上传图片/文档，我来帮你生成可确认的日程。",
-                color = VelaTextSecondary,
-                style = MaterialTheme.typography.bodySmall,
-            )
-        }
-    }
-}
-
-private data class DemoPlanItem(
-    val time: String,
-    val title: String,
-    val subtitle: String,
-    val duration: String,
-    val color: Color,
-)
 
 @Composable
 private fun ImportInputBar(
@@ -655,8 +669,8 @@ private fun ImportInputBar(
     text: String,
     onTextChange: (String) -> Unit,
     onImageClick: () -> Unit,
-    onFileClick: () -> Unit,
-    onVoiceLongPress: () -> Unit,
+    isVoiceRecording: Boolean,
+    onVoiceInput: () -> Unit,
     onSubmit: () -> Unit,
 ) {
     var isAttachmentMenuExpanded by remember { mutableStateOf(false) }
@@ -665,7 +679,7 @@ private fun ImportInputBar(
         shape = RoundedCornerShape(28.dp),
         tonalElevation = 4.dp,
         shadowElevation = 8.dp,
-        color = MaterialTheme.colorScheme.surface,
+        color = ImportInputBarColor,
     ) {
         Row(
             modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp),
@@ -673,8 +687,9 @@ private fun ImportInputBar(
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Box {
-                RoundTextButton(
-                    text = "+",
+                RoundIconButton(
+                    icon = R.drawable.ic_add_24,
+                    contentDescription = "添加",
                     onClick = { isAttachmentMenuExpanded = true },
                 )
                 DropdownMenu(
@@ -683,16 +698,15 @@ private fun ImportInputBar(
                 ) {
                     DropdownMenuItem(
                         text = { Text(text = "图片") },
+                        leadingIcon = {
+                            Icon(
+                                painter = painterResource(id = R.drawable.ic_image_24),
+                                contentDescription = null,
+                            )
+                        },
                         onClick = {
                             isAttachmentMenuExpanded = false
                             onImageClick()
-                        },
-                    )
-                    DropdownMenuItem(
-                        text = { Text(text = "文档") },
-                        onClick = {
-                            isAttachmentMenuExpanded = false
-                            onFileClick()
                         },
                     )
                 }
@@ -713,23 +727,25 @@ private fun ImportInputBar(
                 )
                 if (text.isBlank()) {
                     Text(
-                        text = "发消息或按住说话...",
+                        text = if (isVoiceRecording) {
+                            "正在录音..."
+                        } else {
+                            "输入..."
+                        },
                         style = MaterialTheme.typography.bodyLarge,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                 }
             }
-            RoundTextButton(
-                text = "声",
-                onClick = {},
-                modifier = Modifier.pointerInput(onVoiceLongPress) {
-                    detectTapGestures(
-                        onLongPress = { onVoiceLongPress() },
-                    )
-                },
+            RoundIconButton(
+                icon = if (isVoiceRecording) R.drawable.ic_stop_24 else R.drawable.ic_mic_24,
+                contentDescription = if (isVoiceRecording) "停止录音" else "语音输入",
+                filled = isVoiceRecording,
+                onClick = onVoiceInput,
             )
-            RoundTextButton(
-                text = "发",
+            RoundIconButton(
+                icon = R.drawable.ic_send_24,
+                contentDescription = "发送",
                 enabled = text.isNotBlank(),
                 filled = text.isNotBlank(),
                 onClick = onSubmit,
@@ -739,8 +755,9 @@ private fun ImportInputBar(
 }
 
 @Composable
-private fun RoundTextButton(
-    text: String,
+private fun RoundIconButton(
+    icon: Int,
+    contentDescription: String,
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
     enabled: Boolean = true,
@@ -752,20 +769,20 @@ private fun RoundTextButton(
             .clickable(enabled = enabled, onClick = onClick),
         shape = CircleShape,
         color = when {
-            filled -> MaterialTheme.colorScheme.primary
-            else -> MaterialTheme.colorScheme.surfaceVariant
+            filled -> Color.Black
+            else -> ImportInputButtonColor
         },
     ) {
         Box(contentAlignment = Alignment.Center) {
-            Text(
-                text = text,
-                style = MaterialTheme.typography.titleMedium,
-                fontWeight = FontWeight.Bold,
-                color = when {
-                    filled -> MaterialTheme.colorScheme.onPrimary
-                    enabled -> MaterialTheme.colorScheme.onSurface
+            Icon(
+                painter = painterResource(id = icon),
+                contentDescription = contentDescription,
+                tint = when {
+                    filled -> Color.White
+                    enabled -> Color.Black
                     else -> MaterialTheme.colorScheme.onSurfaceVariant
                 },
+                modifier = Modifier.size(22.dp),
             )
         }
     }
@@ -1074,24 +1091,27 @@ private fun CandidateBatchBar(
     }
 }
 
-private val AssistantBubbleColor = Color(0xFFF4F5F7)
-private val UserBubbleColor = Color(0xFF1478FF)
-private val VelaPageBackground = Color(0xFFFAFBFF)
-private val VelaPrimaryBlue = Color(0xFF2D6BFF)
-private val VelaTextPrimary = Color(0xFF12162A)
-private val VelaTextSecondary = Color(0xFF72788A)
+private val AssistantBubbleColor = Color(0xFFE9E9EB)
+private val UserBubbleColor = Color.Black
+private val VelaPageBackground = Color.White
+private val ImportInputBarColor = Color(0xFFF8ECE7)
+private val ImportInputButtonColor = Color(0xFFF2DDD4)
 
 @Composable
 private fun ChatBubble(message: ChatMessage) {
     val isUser = message.role == ChatMessageRole.User
     val isSystem = message.role == ChatMessageRole.System
     if (isSystem) {
-        Text(
+        Row(
             modifier = Modifier.fillMaxWidth(),
-            text = message.content,
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
+            horizontalArrangement = Arrangement.Center,
+        ) {
+            Text(
+                text = message.content,
+                style = MaterialTheme.typography.bodySmall,
+                color = Color(0xFF8A8A8F),
+            )
+        }
     } else {
         Row(
             modifier = Modifier.fillMaxWidth(),
@@ -1099,7 +1119,7 @@ private fun ChatBubble(message: ChatMessage) {
         ) {
             Surface(
                 modifier = Modifier.fillMaxWidth(if (isUser) 0.86f else 0.88f),
-                shape = RoundedCornerShape(22.dp),
+                shape = RoundedCornerShape(24.dp),
                 color = if (isUser) UserBubbleColor else AssistantBubbleColor,
             ) {
                 Text(
@@ -1247,175 +1267,36 @@ private fun String.looksLikeEditInstruction(): Boolean {
         .any { keyword -> text.contains(keyword) }
 }
 
+private fun Context.hasAudioPermission(): Boolean =
+    checkSelfPermission(Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED
+
+@Suppress("DEPRECATION")
+private fun createVoiceRecorder(file: File): MediaRecorder =
+    MediaRecorder().apply {
+        setAudioSource(MediaRecorder.AudioSource.MIC)
+        setOutputFormat(MediaRecorder.OutputFormat.MPEG_4)
+        setAudioEncoder(MediaRecorder.AudioEncoder.AAC)
+        setAudioEncodingBitRate(96_000)
+        setAudioSamplingRate(16_000)
+        setOutputFile(file.absolutePath)
+        prepare()
+        start()
+    }
+
+private fun Context.createVoiceRecordingFile(): File =
+    File(cacheDir, "vela-voice-${System.currentTimeMillis()}.m4a")
+
+private const val MinVoiceRecordingBytes = 1024L
 private const val MaxAttachmentBytes = 12 * 1024 * 1024
-private const val MaxDocumentTextChars = 24_000
-private const val MaxPdfRenderedPages = 3
-private const val PdfRenderWidth = 1280
 
-private fun Context.toAiInputAttachment(
-    uri: Uri,
-    isImage: Boolean,
-): AiInputAttachment {
-    val fileName = resolveDisplayName(uri) ?: if (isImage) {
-        "图片"
-    } else {
-        "文档"
-    }
-    val mimeType = contentResolver.getType(uri) ?: if (isImage) {
-        "image/jpeg"
-    } else {
-        "application/octet-stream"
-    }
-    val bytes = contentResolver.openInputStream(uri)?.use { input ->
-        val output = ByteArrayOutputStream()
-        val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
-        var totalBytes = 0
-        while (true) {
-            val read = input.read(buffer)
-            if (read <= 0) break
-            totalBytes += read
-            if (totalBytes > MaxAttachmentBytes) {
-                error("附件过大")
-            }
-            output.write(buffer, 0, read)
-        }
-        output.toByteArray()
-    } ?: error("无法读取附件")
-
-    val textContent = if (!isImage && mimeType.isTextLike(fileName)) {
-        bytes.toString(Charsets.UTF_8)
-            .replace("\u0000", "")
-            .take(MaxDocumentTextChars)
-    } else {
-        null
-    }
-    return AiInputAttachment(
-        fileName = fileName,
-        mimeType = mimeType,
-        base64Data = if (isImage || textContent == null) {
-            Base64.getEncoder().encodeToString(bytes)
-        } else {
-            null
-        },
-        textContent = textContent,
-    )
-}
-
-private fun Context.toDocumentAiInputAttachments(uri: Uri): List<AiInputAttachment> {
-    val fileName = resolveDisplayName(uri) ?: "文档"
-    val mimeType = contentResolver.getType(uri) ?: fileName.guessMimeType()
-    return when {
-        mimeType == "application/pdf" || fileName.endsWith(".pdf", ignoreCase = true) ->
-            renderPdfToImageAttachments(uri, fileName)
-        mimeType == "application/vnd.openxmlformats-officedocument.wordprocessingml.document" ||
-            fileName.endsWith(".docx", ignoreCase = true) ->
-            listOf(extractDocxTextAttachment(uri, fileName, mimeType))
-        mimeType.isTextLike(fileName) ->
-            listOf(readTextDocumentAttachment(uri, fileName, mimeType))
-        fileName.endsWith(".doc", ignoreCase = true) ->
-            listOf(readLegacyDocAsTextAttachment(uri, fileName, mimeType))
-        else ->
-            listOf(toAiInputAttachment(uri = uri, isImage = false))
-    }
-}
-
-private fun Context.renderPdfToImageAttachments(
-    uri: Uri,
-    fileName: String,
-): List<AiInputAttachment> {
-    val descriptor = contentResolver.openFileDescriptor(uri, "r")
-        ?: error("PDF 读取失败，请重新选择。")
-    ParcelFileDescriptor.AutoCloseInputStream(descriptor).close()
-    val rendererDescriptor = contentResolver.openFileDescriptor(uri, "r")
-        ?: error("PDF 读取失败，请重新选择。")
-    PdfRenderer(rendererDescriptor).use { renderer ->
-        if (renderer.pageCount <= 0) {
-            error("PDF 没有可识别页面。")
-        }
-        return (0 until renderer.pageCount.coerceAtMost(MaxPdfRenderedPages)).map { pageIndex ->
-            renderer.openPage(pageIndex).use { page ->
-                val scale = PdfRenderWidth.toFloat() / page.width.toFloat()
-                val width = PdfRenderWidth
-                val height = (page.height * scale).toInt().coerceAtLeast(1)
-                val bitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
-                page.render(bitmap, null, null, PdfRenderer.Page.RENDER_MODE_FOR_DISPLAY)
-                val output = ByteArrayOutputStream()
-                bitmap.compress(Bitmap.CompressFormat.JPEG, 88, output)
-                bitmap.recycle()
-                AiInputAttachment(
-                    fileName = "${fileName.substringBeforeLast(".")}-第${pageIndex + 1}页.jpg",
-                    mimeType = "image/jpeg",
-                    base64Data = Base64.getEncoder().encodeToString(output.toByteArray()),
-                    textContent = null,
-                )
-            }
-        }
-    }
-}
-
-private fun Context.extractDocxTextAttachment(
-    uri: Uri,
-    fileName: String,
-    mimeType: String,
-): AiInputAttachment {
-    val textBuilder = StringBuilder()
-    contentResolver.openInputStream(uri)?.use { input ->
-        ZipInputStream(input).use { zip ->
-            while (true) {
-                val entry = zip.nextEntry ?: break
-                if (entry.name == "word/document.xml") {
-                    val xml = zip.bufferedReader(Charsets.UTF_8).readText()
-                    textBuilder.append(xml.toPlainDocxText())
-                    break
-                }
-            }
-        }
-    } ?: error("Word 文档读取失败，请重新选择。")
-    val text = textBuilder.toString().trim()
-    if (text.isBlank()) {
-        error("Word 文档没有读到可识别文本。")
-    }
-    return AiInputAttachment(
-        fileName = fileName,
-        mimeType = mimeType,
-        textContent = text.take(MaxDocumentTextChars),
-    )
-}
-
-private fun Context.readTextDocumentAttachment(
-    uri: Uri,
-    fileName: String,
-    mimeType: String,
-): AiInputAttachment {
+private fun Context.toAiInputAttachment(uri: Uri): AiInputAttachment {
+    val fileName = resolveDisplayName(uri) ?: "图片"
+    val mimeType = contentResolver.getType(uri) ?: "image/jpeg"
     val bytes = readUriBytes(uri)
     return AiInputAttachment(
         fileName = fileName,
         mimeType = mimeType,
-        textContent = bytes.toString(Charsets.UTF_8)
-            .replace("\u0000", "")
-            .take(MaxDocumentTextChars),
-    )
-}
-
-private fun Context.readLegacyDocAsTextAttachment(
-    uri: Uri,
-    fileName: String,
-    mimeType: String,
-): AiInputAttachment {
-    val bytes = readUriBytes(uri)
-    val text = bytes
-        .map { byte -> byte.toInt().toChar() }
-        .joinToString("")
-        .replace(Regex("[^\\u4e00-\\u9fa5A-Za-z0-9：:，,。！？?\\-_/\\s]"), " ")
-        .replace(Regex("\\s+"), " ")
-        .trim()
-    if (text.length < 12) {
-        error("旧版 .doc 暂时无法稳定读取，请转成 docx 或 PDF 后再试。")
-    }
-    return AiInputAttachment(
-        fileName = fileName,
-        mimeType = mimeType,
-        textContent = text.take(MaxDocumentTextChars),
+        base64Data = Base64.getEncoder().encodeToString(bytes),
     )
 }
 
@@ -1434,7 +1315,7 @@ private fun Context.readUriBytes(uri: Uri): ByteArray =
             output.write(buffer, 0, read)
         }
         output.toByteArray()
-    } ?: error("文档读取失败，请重新选择。")
+    } ?: error("图片读取失败，请重新选择。")
 
 private fun Context.resolveDisplayName(uri: Uri): String? =
     runCatching {
@@ -1449,45 +1330,3 @@ private fun Context.resolveDisplayName(uri: Uri): String? =
             }
     }.getOrNull()
         ?: uri.lastPathSegment?.substringAfterLast('/')
-
-private fun String.isTextLike(fileName: String): Boolean {
-    val normalizedMime = lowercase()
-    val normalizedName = fileName.lowercase()
-    return normalizedMime.startsWith("text/") ||
-        normalizedMime in setOf(
-            "application/json",
-            "application/xml",
-            "application/csv",
-            "application/javascript",
-            "application/x-ndjson",
-        ) ||
-        normalizedName.endsWith(".txt") ||
-        normalizedName.endsWith(".md") ||
-        normalizedName.endsWith(".markdown") ||
-        normalizedName.endsWith(".csv") ||
-        normalizedName.endsWith(".json") ||
-        normalizedName.endsWith(".xml") ||
-        normalizedName.endsWith(".html") ||
-        normalizedName.endsWith(".htm")
-}
-
-private fun String.guessMimeType(): String = when {
-    endsWith(".pdf", ignoreCase = true) -> "application/pdf"
-    endsWith(".docx", ignoreCase = true) -> "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
-    endsWith(".doc", ignoreCase = true) -> "application/msword"
-    endsWith(".txt", ignoreCase = true) -> "text/plain"
-    endsWith(".md", ignoreCase = true) -> "text/markdown"
-    endsWith(".csv", ignoreCase = true) -> "text/csv"
-    else -> "application/octet-stream"
-}
-
-private fun String.toPlainDocxText(): String =
-    replace(Regex("<w:tab\\s*/>"), "\t")
-        .replace(Regex("</w:p>"), "\n")
-        .replace(Regex("<[^>]+>"), "")
-        .replace("&lt;", "<")
-        .replace("&gt;", ">")
-        .replace("&amp;", "&")
-        .replace("&quot;", "\"")
-        .replace("&apos;", "'")
-        .replace(Regex("\\n{3,}"), "\n\n")

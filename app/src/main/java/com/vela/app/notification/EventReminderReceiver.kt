@@ -8,26 +8,43 @@ import android.content.Context
 import android.content.Intent
 import android.net.Uri
 import android.os.Build
+import com.vela.app.data.mock.MockVelaRepository
+import com.vela.app.data.model.EventAdviceStatus
 
 class EventReminderReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
+        MockVelaRepository.initialize(context.applicationContext)
         EventNotificationScheduler.ensureChannel(context)
         if (!NotificationPermissionState.canPostNotifications(context)) {
             return
         }
         val eventId = EventNotificationScheduler.eventIdFrom(intent) ?: return
+        val eventDate = EventNotificationScheduler.eventDateFrom(intent)
         val title = EventNotificationScheduler.titleFrom(intent).ifBlank { "日程提醒" }
         val time = EventNotificationScheduler.timeFrom(intent)
         val location = EventNotificationScheduler.locationFrom(intent)
         val reminderText = EventNotificationScheduler.reminderTextFrom(intent)
-        val body = listOf(reminderText, time, location)
+        val adviceText = MockVelaRepository.eventAdviceFor(eventId)
+            ?.takeIf { it.status == EventAdviceStatus.Ready }
+            ?.adviceText
+            ?.takeIf { it.isNotBlank() }
+        val body = listOfNotNull(reminderText, time, location, adviceText)
             .filter { it.isNotBlank() }
             .joinToString(" | ")
             .ifBlank { "日程即将开始" }
         val contentIntent = PendingIntent.getActivity(
             context,
             eventId.hashCode(),
-            Intent(Intent.ACTION_VIEW, Uri.parse("vela://event/$eventId")).apply {
+            Intent(
+                Intent.ACTION_VIEW,
+                Uri.parse(
+                    if (eventDate.isBlank()) {
+                        "vela://event/$eventId"
+                    } else {
+                        "vela://activity/$eventDate"
+                    },
+                ),
+            ).apply {
                 setPackage(context.packageName)
                 addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
             },

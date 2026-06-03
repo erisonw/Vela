@@ -1,16 +1,26 @@
 package com.vela.app.data.mock
 
 import android.content.Context
+import com.vela.app.data.ai.AiEventAdviceRequest
+import com.vela.app.data.ai.AiEventAdviceResult
 import com.vela.app.data.ai.AiInputAttachment
+import com.vela.app.data.ai.AiVoiceRecording
 import com.vela.app.data.ai.AiExtractionRequest
 import com.vela.app.data.ai.AiExtractionResult
 import com.vela.app.data.ai.AiInputType
+import com.vela.app.data.ai.HttpAiEventAdviceClient
 import com.vela.app.data.ai.HttpAiExtractionClient
+import com.vela.app.data.ai.HttpVoiceTranscriptionClient
+import com.vela.app.data.ai.UnavailableAiEventAdviceClient
 import com.vela.app.data.ai.UnavailableAiExtractionClient
+import com.vela.app.data.ai.UnavailableVoiceTranscriptionClient
+import com.vela.app.data.ai.VoiceTranscriptionResult
 import com.vela.app.data.model.ChatMessage
 import com.vela.app.data.model.ChatMessageRole
 import com.vela.app.data.model.DefaultReminderMinutes
 import com.vela.app.data.model.Event
+import com.vela.app.data.model.EventAdvice
+import com.vela.app.data.model.EventAdviceStatus
 import com.vela.app.data.model.EventCandidate
 import com.vela.app.data.model.EventCandidateReviewStatus
 import com.vela.app.data.model.ImportSession
@@ -24,6 +34,7 @@ import com.vela.app.data.model.validateEventInput
 import com.vela.app.data.repository.ImportSubmissionResult
 import com.vela.app.data.repository.ImportResult
 import com.vela.app.data.repository.VelaRepository
+import com.vela.app.data.weather.WeatherHint
 import com.vela.app.data.weather.WeatherHintProvider
 import com.vela.app.notification.EventNotificationScheduler
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -35,11 +46,13 @@ import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 import java.time.OffsetDateTime
 import java.time.ZoneId
+import kotlin.concurrent.thread
 
 object MockVelaRepository : VelaRepository {
     private const val MockNow = "2026-05-16T09:00:00+08:00"
     private const val PreferencesName = "vela_local_store"
     private const val EventsKey = "events_json"
+    private const val EventAdvicesKey = "event_advices_json"
     private const val DefaultReminderKey = "default_reminder_minutes"
     private const val WeatherLatitudeKey = "weather_latitude"
     private const val WeatherLongitudeKey = "weather_longitude"
@@ -48,7 +61,6 @@ object MockVelaRepository : VelaRepository {
     private const val AiApiKeyKey = "ai_api_key"
     private const val AiTextModelKey = "ai_text_model"
     private const val AiVisionModelKey = "ai_vision_model"
-    private const val AiDocumentModelKey = "ai_document_model"
     private const val AiVoiceModelKey = "ai_voice_model"
     private const val NoReminderValue = -1
 
@@ -59,6 +71,15 @@ object MockVelaRepository : VelaRepository {
 
     @Volatile
     private var appContext: Context? = null
+
+    @Volatile
+    private var hasInitialized = false
+
+    @Volatile
+    private var cachedWeatherHint: WeatherHint = WeatherHintProvider.pendingForCoordinates(null, null)
+
+    @Volatile
+    private var weatherRefreshGeneration = 0
 
     private val mockReminder = Reminder(
         id = "reminder-10-min",
@@ -138,21 +159,16 @@ object MockVelaRepository : VelaRepository {
     private val _events = MutableStateFlow(initialEvents)
     override val events: StateFlow<List<Event>> = _events.asStateFlow()
 
+    private val _eventAdvices = MutableStateFlow<Map<String, EventAdvice>>(emptyMap())
+    override val eventAdvices: StateFlow<Map<String, EventAdvice>> = _eventAdvices.asStateFlow()
+
     private val _importSession = MutableStateFlow(
         ImportSession(
             id = "session-mock-import",
             createdAt = MockNow,
             updatedAt = MockNow,
             status = ImportSessionStatus.Draft,
-            messages = listOf(
-                ChatMessage(
-                    id = "message-1",
-                    sessionId = "session-mock-import",
-                    role = ChatMessageRole.System,
-                    content = "当前未接入真实 AI 服务。发送文本失败时会提示重试，不会生成假日程。",
-                    createdAt = MockNow,
-                ),
-            ),
+            messages = emptyList(),
             candidates = initialCandidates,
         ),
     )
@@ -164,15 +180,26 @@ object MockVelaRepository : VelaRepository {
     private val _widgetSnapshot = MutableStateFlow(createWidgetSnapshot(initialEvents, initialCandidates))
     override val widgetSnapshot: StateFlow<WidgetSnapshot> = _widgetSnapshot.asStateFlow()
 
+    @Synchronized
     fun initialize(context: Context) {
         val applicationContext = context.applicationContext
         appContext = applicationContext
-        loadPersistedEvents(applicationContext)?.let { savedEvents ->
-            _events.value = savedEvents.sortedBy { it.startAt }
+        if (!hasInitialized) {
+            loadPersistedEvents(applicationContext)?.let { savedEvents ->
+                _events.value = savedEvents.sortedBy { it.startAt }
+            }
+            _eventAdvices.value = loadEventAdvices(applicationContext)
+            val preferences = loadUserPreferences(applicationContext)
+            _userPreferences.value = preferences
+            cachedWeatherHint = WeatherHintProvider.pendingForCoordinates(
+                latitude = preferences.weatherLatitude,
+                longitude = preferences.weatherLongitude,
+            )
+            EventNotificationScheduler.ensureChannel(applicationContext)
+            hasInitialized = true
+            scheduleAllRemindersAsync(applicationContext, _events.value)
+            refreshWeatherAsync()
         }
-        _userPreferences.value = loadUserPreferences(applicationContext)
-        EventNotificationScheduler.ensureChannel(applicationContext)
-        EventNotificationScheduler.scheduleAll(applicationContext, _events.value)
         syncSessionAndWidgetSnapshot()
     }
 
@@ -279,98 +306,8 @@ object MockVelaRepository : VelaRepository {
         )
     }
 
-    override fun submitImportFile(attachments: List<AiInputAttachment>): ImportSubmissionResult {
-        if (attachments.isEmpty()) {
-            return ImportSubmissionResult(
-                isSuccess = false,
-                message = "文档读取失败，请重新选择。",
-            )
-        }
-        val fileNames = attachments.joinToString("、") { it.fileName }
-        val session = _importSession.value
-        val extractionResult = aiExtractionClient().extract(
-            AiExtractionRequest(
-                sessionId = session.id,
-                type = AiInputType.File,
-                attachments = attachments,
-                attachmentIds = attachments.map { it.fileName },
-            ),
-        )
-        val assistantText = when (extractionResult) {
-            is AiExtractionResult.Success -> extractionResult.summary
-            is AiExtractionResult.Failure -> extractionResult.message
-        }
-        _importSession.update { currentSession ->
-            currentSession.copy(
-                updatedAt = MockNow,
-                messages = currentSession.messages + listOf(
-                    ChatMessage(
-                        id = "message-${session.messages.size + 1}",
-                        sessionId = currentSession.id,
-                        role = ChatMessageRole.User,
-                        content = "文档上传：$fileNames",
-                        createdAt = MockNow,
-                    ),
-                    ChatMessage(
-                        id = "message-${session.messages.size + 2}",
-                        sessionId = currentSession.id,
-                        role = ChatMessageRole.Assistant,
-                        content = assistantText,
-                        createdAt = MockNow,
-                    ),
-                ),
-            )
-        }
-        if (extractionResult is AiExtractionResult.Success) {
-            addExtractedCandidates(extractionResult)
-        }
-        syncSessionAndWidgetSnapshot()
-        return ImportSubmissionResult(
-            isSuccess = extractionResult is AiExtractionResult.Success,
-            message = assistantText,
-        )
-    }
-
-    override fun submitImportVoice(): ImportSubmissionResult {
-        val session = _importSession.value
-        val extractionResult = aiExtractionClient().extract(
-            AiExtractionRequest(
-                sessionId = session.id,
-                type = AiInputType.Voice,
-                attachmentIds = listOf("local-voice-placeholder"),
-            ),
-        )
-        val assistantText = when (extractionResult) {
-            is AiExtractionResult.Success -> extractionResult.summary
-            is AiExtractionResult.Failure -> extractionResult.message
-        }
-        _importSession.update { currentSession ->
-            currentSession.copy(
-                updatedAt = MockNow,
-                messages = currentSession.messages + listOf(
-                    ChatMessage(
-                        id = "message-${session.messages.size + 1}",
-                        sessionId = currentSession.id,
-                        role = ChatMessageRole.User,
-                        content = "语音输入",
-                        createdAt = MockNow,
-                    ),
-                    ChatMessage(
-                        id = "message-${session.messages.size + 2}",
-                        sessionId = currentSession.id,
-                        role = ChatMessageRole.Assistant,
-                        content = assistantText,
-                        createdAt = MockNow,
-                    ),
-                ),
-            )
-        }
-        syncSessionAndWidgetSnapshot()
-        return ImportSubmissionResult(
-            isSuccess = extractionResult is AiExtractionResult.Success,
-            message = assistantText,
-        )
-    }
+    override fun transcribeVoice(recording: AiVoiceRecording): VoiceTranscriptionResult =
+        voiceTranscriptionClient().transcribe(recording)
 
     override fun submitNaturalLanguageEdit(instruction: String): ImportSubmissionResult {
         val trimmedInstruction = instruction.trim()
@@ -616,6 +553,7 @@ object MockVelaRepository : VelaRepository {
                 }
             }.sortedBy { it.startAt }
         }
+        clearEventAdvice(event.id)
         persistEvents()
         appContext?.let { context ->
             EventNotificationScheduler.scheduleEvent(context, event)
@@ -630,9 +568,63 @@ object MockVelaRepository : VelaRepository {
         _events.update { events ->
             events.filterNot { it.id == eventId }
         }
+        clearEventAdvice(eventId)
         persistEvents()
         syncSessionAndWidgetSnapshot()
     }
+
+    override fun prepareEventAdvice(eventId: String): EventAdvice? {
+        val event = _events.value.firstOrNull { it.id == eventId } ?: return null
+        val weatherText = listOf(cachedWeatherHint.weatherHint, cachedWeatherHint.prepHint)
+            .filter { it.isNotBlank() }
+            .joinToString("；")
+        val sourceHash = event.adviceSourceHash(weatherText)
+        val existing = _eventAdvices.value[eventId]
+        if (
+            existing?.status == EventAdviceStatus.Ready &&
+            existing.sourceHash == sourceHash &&
+            existing.adviceText.isNullOrBlank().not()
+        ) {
+            return existing
+        }
+
+        upsertEventAdvice(
+            EventAdvice(
+                eventId = eventId,
+                sourceHash = sourceHash,
+                status = EventAdviceStatus.Pending,
+            ),
+        )
+
+        val result = eventAdviceClient().generate(
+            AiEventAdviceRequest(
+                event = event,
+                weatherHint = weatherText,
+            ),
+        )
+        val advice = when (result) {
+            is AiEventAdviceResult.Success -> EventAdvice(
+                eventId = eventId,
+                adviceText = result.adviceText.trim(),
+                generatedAt = OffsetDateTime.now(ZoneId.of("Asia/Shanghai")).toString(),
+                sourceHash = sourceHash,
+                status = EventAdviceStatus.Ready,
+            )
+
+            is AiEventAdviceResult.Failure -> EventAdvice(
+                eventId = eventId,
+                adviceText = null,
+                generatedAt = OffsetDateTime.now(ZoneId.of("Asia/Shanghai")).toString(),
+                sourceHash = sourceHash,
+                status = EventAdviceStatus.Failed,
+            )
+        }
+        upsertEventAdvice(advice)
+        return advice
+    }
+
+    override fun eventAdviceFor(eventId: String): EventAdvice? =
+        _eventAdvices.value[eventId]
 
     override fun updateDefaultReminderMinutes(minutesBefore: Int?) {
         _userPreferences.update { preferences ->
@@ -650,7 +642,7 @@ object MockVelaRepository : VelaRepository {
             )
         }
         persistUserPreferences()
-        syncSessionAndWidgetSnapshot()
+        refreshWeatherAsync()
     }
 
     override fun updateAiServiceConfig(
@@ -658,7 +650,6 @@ object MockVelaRepository : VelaRepository {
         apiKey: String,
         textModel: String,
         visionModel: String,
-        documentModel: String,
         voiceModel: String,
     ) {
         _userPreferences.update { preferences ->
@@ -669,7 +660,6 @@ object MockVelaRepository : VelaRepository {
                 aiApiKey = apiKey.trim(),
                 aiTextModel = trimmedTextModel,
                 aiVisionModel = visionModel.trim(),
-                aiDocumentModel = documentModel.trim(),
                 aiVoiceModel = voiceModel.trim(),
                 aiServiceStatusText = if (trimmedEndpoint.isBlank() || trimmedTextModel.isBlank()) {
                     "未接入真实 AI 服务"
@@ -682,7 +672,38 @@ object MockVelaRepository : VelaRepository {
     }
 
     override fun refreshWeather() {
+        refreshWeatherAsync()
+    }
+
+    private fun scheduleAllRemindersAsync(context: Context, events: List<Event>) {
+        val applicationContext = context.applicationContext
+        thread(name = "vela-reminder-restore") {
+            EventNotificationScheduler.scheduleAll(applicationContext, events)
+        }
+    }
+
+    private fun refreshWeatherAsync() {
+        val preferences = _userPreferences.value
+        val latitude = preferences.weatherLatitude
+        val longitude = preferences.weatherLongitude
+        cachedWeatherHint = WeatherHintProvider.pendingForCoordinates(
+            latitude = latitude,
+            longitude = longitude,
+        )
         syncSessionAndWidgetSnapshot()
+        if (latitude == null || longitude == null) {
+            return
+        }
+
+        val generation = weatherRefreshGeneration + 1
+        weatherRefreshGeneration = generation
+        thread(name = "vela-weather-refresh") {
+            val weatherHint = WeatherHintProvider.forCoordinates(latitude, longitude)
+            if (weatherRefreshGeneration == generation) {
+                cachedWeatherHint = weatherHint
+                syncSessionAndWidgetSnapshot()
+            }
+        }
     }
 
     private fun syncSessionAndWidgetSnapshot() {
@@ -717,10 +738,7 @@ object MockVelaRepository : VelaRepository {
             }
         }
         val hint = WeatherHintProvider.withEventPrepHint(
-            weatherHint = WeatherHintProvider.forCoordinates(
-                latitude = _userPreferences.value.weatherLatitude,
-                longitude = _userPreferences.value.weatherLongitude,
-            ),
+            weatherHint = cachedWeatherHint,
             events = weatherTargetEvents,
         )
         return WidgetSnapshot(
@@ -769,6 +787,42 @@ object MockVelaRepository : VelaRepository {
             .apply()
     }
 
+    private fun loadEventAdvices(context: Context): Map<String, EventAdvice> {
+        val storedAdvices = context
+            .getSharedPreferences(PreferencesName, Context.MODE_PRIVATE)
+            .getString(EventAdvicesKey, null)
+            ?: return emptyMap()
+
+        return runCatching {
+            json.decodeFromString<List<EventAdvice>>(storedAdvices)
+                .associateBy { it.eventId }
+        }.getOrDefault(emptyMap())
+    }
+
+    private fun persistEventAdvices() {
+        val context = appContext ?: return
+        val storedAdvices = json.encodeToString(_eventAdvices.value.values.toList())
+        context
+            .getSharedPreferences(PreferencesName, Context.MODE_PRIVATE)
+            .edit()
+            .putString(EventAdvicesKey, storedAdvices)
+            .apply()
+    }
+
+    private fun upsertEventAdvice(advice: EventAdvice) {
+        _eventAdvices.update { advices ->
+            advices + (advice.eventId to advice)
+        }
+        persistEventAdvices()
+    }
+
+    private fun clearEventAdvice(eventId: String) {
+        _eventAdvices.update { advices ->
+            advices - eventId
+        }
+        persistEventAdvices()
+    }
+
     private fun loadUserPreferences(context: Context): UserPreferences {
         val sharedPreferences = context.getSharedPreferences(PreferencesName, Context.MODE_PRIVATE)
         val storedReminder = sharedPreferences.getInt(DefaultReminderKey, DefaultReminderMinutes)
@@ -785,7 +839,6 @@ object MockVelaRepository : VelaRepository {
             aiApiKey = sharedPreferences.getString(AiApiKeyKey, "").orEmpty(),
             aiTextModel = aiTextModel,
             aiVisionModel = sharedPreferences.getString(AiVisionModelKey, "").orEmpty(),
-            aiDocumentModel = sharedPreferences.getString(AiDocumentModelKey, "").orEmpty(),
             aiVoiceModel = sharedPreferences.getString(AiVoiceModelKey, "").orEmpty(),
             weatherLatitude = sharedPreferences.getDoubleOrNull(WeatherLatitudeKey),
             weatherLongitude = sharedPreferences.getDoubleOrNull(WeatherLongitudeKey),
@@ -804,7 +857,6 @@ object MockVelaRepository : VelaRepository {
             .putString(AiApiKeyKey, preferences.aiApiKey)
             .putString(AiTextModelKey, preferences.aiTextModel)
             .putString(AiVisionModelKey, preferences.aiVisionModel)
-            .putString(AiDocumentModelKey, preferences.aiDocumentModel)
             .putString(AiVoiceModelKey, preferences.aiVoiceModel)
             .putNullableDouble(WeatherLatitudeKey, preferences.weatherLatitude)
             .putNullableDouble(WeatherLongitudeKey, preferences.weatherLongitude)
@@ -821,10 +873,30 @@ object MockVelaRepository : VelaRepository {
                 apiKey = preferences.aiApiKey,
                 textModel = preferences.aiTextModel,
                 visionModel = preferences.aiVisionModel,
-                documentModel = preferences.aiDocumentModel,
-                voiceModel = preferences.aiVoiceModel,
             )
         } ?: UnavailableAiExtractionClient
+
+    private fun eventAdviceClient() =
+        _userPreferences.value.takeIf {
+            it.aiEndpoint.isNotBlank() && it.aiTextModel.isNotBlank()
+        }?.let { preferences ->
+            HttpAiEventAdviceClient(
+                endpoint = preferences.aiEndpoint,
+                apiKey = preferences.aiApiKey,
+                model = preferences.aiTextModel,
+            )
+        } ?: UnavailableAiEventAdviceClient
+
+    private fun voiceTranscriptionClient() =
+        _userPreferences.value.takeIf {
+            it.aiEndpoint.isNotBlank() && it.aiVoiceModel.isNotBlank()
+        }?.let { preferences ->
+            HttpVoiceTranscriptionClient(
+                endpoint = preferences.aiEndpoint,
+                apiKey = preferences.aiApiKey,
+                model = preferences.aiVoiceModel,
+            )
+        } ?: UnavailableVoiceTranscriptionClient
 
     private fun android.content.SharedPreferences.getDoubleOrNull(key: String): Double? =
         if (contains(key)) {
@@ -864,4 +936,16 @@ object MockVelaRepository : VelaRepository {
             add("地点")
         }
     }
+
+    private fun Event.adviceSourceHash(weatherText: String): String =
+        listOf(
+            title,
+            startAt,
+            endAt.orEmpty(),
+            timezone.orEmpty(),
+            location?.name.orEmpty(),
+            location?.address.orEmpty(),
+            description.orEmpty(),
+            weatherText,
+        ).joinToString("|").hashCode().toString()
 }
