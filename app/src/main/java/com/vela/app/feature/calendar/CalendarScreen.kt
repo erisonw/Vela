@@ -1,7 +1,12 @@
 package com.vela.app.feature.calendar
 
 import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.animateContentSize
 import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.animateDpAsState
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
@@ -12,9 +17,10 @@ import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.animation.slideOutVertically
 import androidx.compose.animation.togetherWith
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.background
-import androidx.compose.foundation.gestures.detectHorizontalDragGestures
+import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -42,6 +48,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
@@ -71,6 +78,7 @@ import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.delay
 import java.time.LocalDate
 import java.time.ZoneId
+import kotlin.math.absoluteValue
 
 class CalendarViewModel : ViewModel() {
     private val repository = MockVelaRepository
@@ -93,10 +101,10 @@ fun CalendarScreen(
     var selectedDate by remember { mutableStateOf(LocalDate.now(ZoneId.of("Asia/Shanghai"))) }
     var monthDirection by remember { mutableStateOf(1) }
     var pendingNavigation by remember { mutableStateOf<PendingDateNavigation?>(null) }
-    val eventCounts = remember(events) { events.countByDate() }
-    val holidayMap = remember(selectedDate.year) { chineseHolidayMap(selectedDate.year) }
-    val selectedEventCount = eventCounts[selectedDate].orZero()
-    val selectedHoliday = holidayMap[selectedDate]
+    var isCalendarExpanded by remember { mutableStateOf(false) }
+    val eventsByDate = remember(events) { events.groupByDate() }
+    val selectedEventCount = eventsByDate[selectedDate].orEmpty().size
+    val selectedSpecialDay = chineseSpecialDayMap(selectedDate.year)[selectedDate]
 
     LaunchedEffect(pendingNavigation) {
         val pending = pendingNavigation ?: return@LaunchedEffect
@@ -125,7 +133,9 @@ fun CalendarScreen(
                 selectedDate = selectedDate,
                 monthDirection = monthDirection,
                 isNavigationPending = pendingNavigation != null,
-                eventCounts = eventCounts,
+                eventsByDate = eventsByDate,
+                isExpanded = isCalendarExpanded,
+                onExpandedChange = { isCalendarExpanded = it },
                 onDateSelected = { date ->
                     if (pendingNavigation != null) {
                         return@MonthCalendarGrid
@@ -147,7 +157,7 @@ fun CalendarScreen(
             SelectedDateSummary(
                 selectedDate = selectedDate,
                 eventCount = selectedEventCount,
-                holiday = selectedHoliday,
+                holiday = selectedSpecialDay?.summaryLabel,
                 onScheduleClick = { onActivityDateClick(selectedDate) },
             )
         }
@@ -159,36 +169,52 @@ private fun MonthCalendarGrid(
     selectedDate: LocalDate,
     monthDirection: Int,
     isNavigationPending: Boolean,
-    eventCounts: Map<LocalDate, Int>,
+    eventsByDate: Map<LocalDate, List<Event>>,
+    isExpanded: Boolean,
+    onExpandedChange: (Boolean) -> Unit,
     onDateSelected: (LocalDate) -> Unit,
     onMonthSwipe: (Long) -> Unit,
 ) {
-    var dragAmount by remember(selectedDate) { mutableStateOf(0f) }
+    var dragX by remember(selectedDate, isExpanded) { mutableStateOf(0f) }
+    var dragY by remember(selectedDate, isExpanded) { mutableStateOf(0f) }
     val visibleMonth = selectedDate.withDayOfMonth(1)
     val transitionDirection = monthDirection.takeIf { it != 0 } ?: 1
 
-    // 提升卡片设计的品质感
     Surface(
         modifier = Modifier
             .fillMaxWidth()
             .padding(vertical = 4.dp)
+            .animateContentSize(
+                animationSpec = spring(
+                    dampingRatio = Spring.DampingRatioNoBouncy,
+                    stiffness = Spring.StiffnessMediumLow,
+                ),
+            )
             .shadow(
                 elevation = 12.dp,
                 shape = RoundedCornerShape(28.dp),
                 spotColor = Color(0x22000000)
             )
-            .pointerInput(selectedDate) {
-                detectHorizontalDragGestures(
+            .pointerInput(selectedDate, isExpanded) {
+                detectDragGestures(
                     onDragEnd = {
                         when {
-                            dragAmount <= -80f -> onMonthSwipe(1)
-                            dragAmount >= 80f -> onMonthSwipe(-1)
+                            dragY.absoluteValue > dragX.absoluteValue && dragY >= 72f -> onExpandedChange(true)
+                            dragY.absoluteValue > dragX.absoluteValue && dragY <= -72f -> onExpandedChange(false)
+                            dragX <= -80f -> onMonthSwipe(1)
+                            dragX >= 80f -> onMonthSwipe(-1)
                         }
-                        dragAmount = 0f
+                        dragX = 0f
+                        dragY = 0f
                     },
-                    onDragCancel = { dragAmount = 0f },
-                    onHorizontalDrag = { _, dragDelta ->
-                        dragAmount += dragDelta
+                    onDragCancel = {
+                        dragX = 0f
+                        dragY = 0f
+                    },
+                    onDrag = { change, dragAmount ->
+                        change.consume()
+                        dragX += dragAmount.x
+                        dragY += dragAmount.y
                     },
                 )
             },
@@ -196,10 +222,9 @@ private fun MonthCalendarGrid(
         color = Color.White,
     ) {
         Column(
-            modifier = Modifier.padding(horizontal = 12.dp, vertical = 20.dp),
-            verticalArrangement = Arrangement.spacedBy(16.dp),
+            modifier = Modifier.padding(horizontal = 12.dp, vertical = 16.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
-            // 月份抬头更简洁有力
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -227,32 +252,39 @@ private fun MonthCalendarGrid(
                         )
                     }
                 }
+                Spacer(modifier = Modifier.weight(1f))
+                CalendarExpandHandle(
+                    isExpanded = isExpanded,
+                    onClick = { onExpandedChange(!isExpanded) },
+                )
             }
 
-            // 星期表头更淡雅
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.spacedBy(0.dp),
             ) {
-                WeekdayLabels.forEach { label ->
+                WeekdayLabels.forEachIndexed { index, label ->
                     Text(
                         modifier = Modifier.weight(1f),
                         text = label,
                         style = MaterialTheme.typography.labelMedium,
-                        color = VelaTextSecondary.copy(alpha = 0.6f),
+                        color = if (index == 0 || index == 6) {
+                            VelaWarmRed.copy(alpha = 0.72f)
+                        } else {
+                            VelaTextSecondary.copy(alpha = 0.6f)
+                        },
                         textAlign = TextAlign.Center
                     )
                 }
             }
 
-            // 核心日历网格
             AnimatedContent(
                 targetState = visibleMonth,
                 transitionSpec = { monthSlideTransition(transitionDirection) },
                 label = "month-grid",
             ) { month ->
-                Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                    buildMonthCells(month, eventCounts, chineseHolidayMap(month.year)).forEach { week ->
+                Column(verticalArrangement = Arrangement.spacedBy(if (isExpanded) 2.dp else 1.dp)) {
+                    buildMonthCells(month, eventsByDate).forEach { week ->
                         Row(
                             modifier = Modifier.fillMaxWidth(),
                             horizontalArrangement = Arrangement.spacedBy(0.dp),
@@ -262,6 +294,7 @@ private fun MonthCalendarGrid(
                                     cell = cell,
                                     selectedDate = selectedDate,
                                     isNavigationPending = isNavigationPending,
+                                    isExpanded = isExpanded,
                                     onDateSelected = onDateSelected,
                                 )
                             }
@@ -274,94 +307,257 @@ private fun MonthCalendarGrid(
 }
 
 @Composable
+private fun CalendarExpandHandle(
+    isExpanded: Boolean,
+    onClick: () -> Unit,
+) {
+    Surface(
+        modifier = Modifier
+            .size(width = 42.dp, height = 28.dp)
+            .clickable(onClick = onClick),
+        shape = RoundedCornerShape(999.dp),
+        color = VelaSoftLavender.copy(alpha = 0.92f),
+    ) {
+        Box(contentAlignment = Alignment.Center) {
+            Text(
+                text = if (isExpanded) "⌃" else "⌄",
+                color = VelaPrimaryBlue,
+                fontWeight = FontWeight.Bold,
+            )
+        }
+    }
+}
+
+@Composable
 private fun RowScope.CalendarDayCell(
     cell: CalendarDateCell,
     selectedDate: LocalDate,
     isNavigationPending: Boolean,
+    isExpanded: Boolean,
     onDateSelected: (LocalDate) -> Unit,
 ) {
     val date = cell.date
-    if (date == null) {
-        Spacer(modifier = Modifier.weight(1f).height(64.dp))
-        return
-    }
-
     val isSelected = date == selectedDate
     val isToday = date == LocalDate.now(ZoneId.of("Asia/Shanghai"))
     val isWeekend = date.dayOfWeek == DayOfWeek.SATURDAY || date.dayOfWeek == DayOfWeek.SUNDAY
+    val contentAlpha = if (cell.isCurrentMonth) 1f else 0.2f
+    val cellHeight by animateDpAsState(
+        targetValue = if (isExpanded) 84.dp else 52.dp,
+        animationSpec = spring(
+            dampingRatio = Spring.DampingRatioNoBouncy,
+            stiffness = Spring.StiffnessMediumLow,
+        ),
+        label = "calendar-cell-height",
+    )
+    val detailAlpha by animateFloatAsState(
+        targetValue = if (isExpanded) 1f else 0f,
+        animationSpec = tween(CalendarMotionSpec.ExpandTransitionMillis),
+        label = "calendar-detail-alpha",
+    )
 
     val cellBgColor by animateColorAsState(
-        targetValue = if (isSelected) VelaPrimaryBlue.copy(alpha = 0.15f) else Color.Transparent,
+        targetValue = when {
+            isSelected -> VelaPrimaryBlue.copy(alpha = 0.12f)
+            cell.specialDay?.kind == CalendarDayKind.Rest -> VelaWarmRed.copy(alpha = if (isExpanded) 0.035f else 0.02f)
+            else -> Color.Transparent
+        },
         label = "cell-outer-bg"
     )
 
     Column(
         modifier = Modifier
             .weight(1f)
-            .height(68.dp)
+            .height(cellHeight)
             .clip(RoundedCornerShape(12.dp))
             .background(cellBgColor)
+            .border(
+                width = if (isSelected) 1.dp else 0.dp,
+                color = if (isSelected) VelaTextSecondary.copy(alpha = 0.55f) else Color.Transparent,
+                shape = RoundedCornerShape(12.dp),
+            )
             .clickable(enabled = !isNavigationPending) { onDateSelected(date) }
-            .padding(vertical = 6.dp),
+            .padding(horizontal = 0.dp, vertical = 3.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.spacedBy(4.dp)
+        verticalArrangement = Arrangement.spacedBy(2.dp)
     ) {
-        // 日期数字
         Box(
             modifier = Modifier
-                .size(30.dp)
-                .background(if (isToday) VelaPrimaryBlue else Color.Transparent, CircleShape),
-            contentAlignment = Alignment.Center
+                .fillMaxWidth()
+                .height(28.dp),
+            contentAlignment = Alignment.Center,
         ) {
-            Text(
-                text = date.dayOfMonth.toString(),
-                style = MaterialTheme.typography.titleMedium,
-                fontWeight = if (isToday || isSelected) FontWeight.Bold else FontWeight.Medium,
-                color = when {
-                    isToday -> Color.White
-                    isSelected -> VelaPrimaryBlue
-                    isWeekend -> VelaTextSecondary.copy(alpha = 0.8f)
-                    else -> VelaTextPrimary
-                }
-            )
+            Box(
+                modifier = Modifier
+                    .size(28.dp)
+                    .background(if (isToday) VelaPrimaryBlue else Color.Transparent, CircleShape),
+                contentAlignment = Alignment.Center
+            ) {
+                Text(
+                    text = date.dayOfMonth.toString(),
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = if (isToday || isSelected || cell.specialDay != null) FontWeight.Bold else FontWeight.Medium,
+                    color = when {
+                        isToday -> Color.White
+                        isSelected -> VelaPrimaryBlue
+                        cell.specialDay?.kind == CalendarDayKind.Rest -> VelaWarmRed
+                        isWeekend -> VelaWarmRed.copy(alpha = 0.72f)
+                        else -> VelaTextPrimary
+                    }.copy(alpha = if (isToday) 1f else contentAlpha)
+                )
+            }
+            cell.specialDay?.let { specialDay ->
+                SpecialDayBadge(
+                    specialDay = specialDay,
+                    modifier = Modifier.align(Alignment.TopEnd),
+                    alpha = contentAlpha,
+                )
+            }
         }
 
-        // 节日/农历标记
         Column(
             horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.spacedBy(2.dp)
+            verticalArrangement = Arrangement.spacedBy(1.dp)
         ) {
-            cell.holiday?.let { holiday ->
+            if (isExpanded) {
                 Text(
-                    text = holiday,
-                    style = MaterialTheme.typography.labelSmall.copy(fontSize = 9.sp, fontWeight = FontWeight.Bold),
-                    color = VelaWarmRed,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis
-                )
-            } ?: run {
-                val lunar = date.getLunarDayString()
-                Text(
-                    text = lunar,
+                    modifier = Modifier.alpha(detailAlpha * contentAlpha),
+                    text = date.getLunarDayString(),
                     style = MaterialTheme.typography.labelSmall.copy(fontSize = 9.sp),
-                    color = if (isSelected) VelaPrimaryBlue.copy(alpha = 0.7f) else VelaTextSecondary.copy(alpha = 0.6f),
-                    maxLines = 1
+                    color = VelaTextSecondary,
+                    maxLines = 1,
                 )
             }
 
-            // 日程圆点
-            if (cell.eventCount > 0) {
-                Box(
-                    modifier = Modifier
-                        .size(4.dp)
-                        .background(VelaPrimaryBlue, CircleShape)
+            cell.specialDay?.takeIf { it.kind == CalendarDayKind.Rest }?.let { specialDay ->
+                CalendarBand(
+                    text = specialDay.label.takeIf {
+                        isExpanded && cell.segment in listOf(CalendarRangeSegment.Single, CalendarRangeSegment.Start)
+                    }.orEmpty(),
+                    color = VelaWarmRed.copy(alpha = if (isExpanded) 0.34f else 0.56f),
+                    textColor = VelaTextPrimary,
+                    segment = cell.segment,
+                    compact = !isExpanded,
                 )
+            }
+
+            if (isExpanded) {
+                cell.events.take(2).forEach { event ->
+                    CalendarBand(
+                        text = event.title,
+                        color = event.calendarMarkerColor().copy(alpha = 0.28f),
+                        textColor = VelaTextPrimary,
+                        segment = CalendarRangeSegment.Single,
+                        compact = false,
+                    )
+                }
+                if (cell.events.size > 2) {
+                    Text(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .alpha(detailAlpha * contentAlpha),
+                        text = "+${cell.events.size - 2}",
+                        style = MaterialTheme.typography.labelSmall.copy(fontSize = 9.sp),
+                        color = VelaTextSecondary,
+                        textAlign = TextAlign.Start,
+                    )
+                }
             } else {
-                Spacer(modifier = Modifier.size(4.dp))
+                cell.events.take(2).forEach { event ->
+                    CalendarBand(
+                        text = "",
+                        color = event.calendarMarkerColor(),
+                        textColor = Color.Transparent,
+                        segment = CalendarRangeSegment.Single,
+                        compact = true,
+                    )
+                }
+                if (cell.specialDay == null && cell.events.isEmpty()) {
+                    Spacer(modifier = Modifier.height(4.dp))
+                }
             }
         }
     }
 }
+
+@Composable
+private fun SpecialDayBadge(
+    specialDay: CalendarSpecialDay,
+    modifier: Modifier,
+    alpha: Float,
+) {
+    val color = when (specialDay.kind) {
+        CalendarDayKind.Rest -> VelaWarmRed
+        CalendarDayKind.Work -> VelaWorkBlue
+    }
+    Surface(
+        modifier = modifier
+            .size(17.dp)
+            .alpha(alpha),
+        shape = CircleShape,
+        color = color,
+    ) {
+        Box(contentAlignment = Alignment.Center) {
+            Text(
+                text = when (specialDay.kind) {
+                    CalendarDayKind.Rest -> "休"
+                    CalendarDayKind.Work -> "班"
+                },
+                style = MaterialTheme.typography.labelSmall.copy(fontSize = 8.sp),
+                color = Color.White,
+                fontWeight = FontWeight.Bold,
+                textAlign = TextAlign.Center,
+            )
+        }
+    }
+}
+
+@Composable
+private fun CalendarBand(
+    text: String,
+    color: Color,
+    textColor: Color,
+    segment: CalendarRangeSegment,
+    compact: Boolean,
+) {
+    Surface(
+        modifier = Modifier
+            .fillMaxWidth()
+            .height(if (compact) 4.dp else 15.dp),
+        shape = segment.bandShape(),
+        color = color,
+    ) {
+        if (!compact && text.isNotBlank()) {
+            Text(
+                modifier = Modifier.padding(horizontal = 2.dp),
+                text = text,
+                style = MaterialTheme.typography.labelSmall.copy(fontSize = 8.sp),
+                color = textColor,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                textAlign = TextAlign.Start,
+            )
+        }
+    }
+}
+
+@Composable
+private fun CalendarRangeSegment.bandShape(): RoundedCornerShape =
+    when (this) {
+        CalendarRangeSegment.Single -> RoundedCornerShape(5.dp)
+        CalendarRangeSegment.Start -> RoundedCornerShape(
+            topStart = 5.dp,
+            bottomStart = 5.dp,
+            topEnd = 0.dp,
+            bottomEnd = 0.dp,
+        )
+        CalendarRangeSegment.Middle -> RoundedCornerShape(0.dp)
+        CalendarRangeSegment.End -> RoundedCornerShape(
+            topStart = 0.dp,
+            bottomStart = 0.dp,
+            topEnd = 5.dp,
+            bottomEnd = 5.dp,
+        )
+    }
 
 
 @Composable
@@ -498,6 +694,7 @@ private object CalendarMotionSpec {
     const val TapFeedbackMillis = 120L
     const val MonthTransitionMillis = 260
     const val SummaryTransitionMillis = 220
+    const val ExpandTransitionMillis = 240
 }
 
 private val VelaPageBackground = Color(0xFFFAFBFF)
@@ -506,6 +703,15 @@ private val VelaTextPrimary = Color(0xFF12162A)
 private val VelaTextSecondary = Color(0xFF72788A)
 private val VelaSoftLavender = Color(0xFFF1F0FF)
 private val VelaWarmRed = Color(0xFFE45757)
+private val VelaWorkBlue = Color(0xFF2F9AEF)
+private val CalendarEventColors = listOf(
+    Color(0xFF2D6BFF),
+    Color(0xFF17A86B),
+    Color(0xFFE6A629),
+    Color(0xFFB763F6),
+    Color(0xFFE45757),
+    Color(0xFF00A7B8),
+)
 
 private data class PendingDateNavigation(
     val date: LocalDate,
@@ -525,52 +731,92 @@ private data class SelectedDateSummaryState(
     }
 }
 
+internal enum class CalendarDayKind {
+    Rest,
+    Work,
+}
+
+internal data class CalendarSpecialDay(
+    val label: String,
+    val kind: CalendarDayKind,
+) {
+    val summaryLabel: String
+        get() = when (kind) {
+            CalendarDayKind.Rest -> label
+            CalendarDayKind.Work -> "调休上班"
+        }
+}
+
+private enum class CalendarRangeSegment {
+    Single,
+    Start,
+    Middle,
+    End,
+}
+
 private data class CalendarDateCell(
-    val date: LocalDate?,
-    val eventCount: Int = 0,
-    val holiday: String? = null,
+    val date: LocalDate,
+    val isCurrentMonth: Boolean,
+    val events: List<Event> = emptyList(),
+    val specialDay: CalendarSpecialDay? = null,
+    val segment: CalendarRangeSegment = CalendarRangeSegment.Single,
 )
 
-private val WeekdayLabels = listOf("一", "二", "三", "四", "五", "六", "日")
+private val WeekdayLabels = listOf("日", "一", "二", "三", "四", "五", "六")
 
 private fun buildMonthCells(
     selectedDate: LocalDate,
-    eventCounts: Map<LocalDate, Int>,
-    holidays: Map<LocalDate, String>,
+    eventsByDate: Map<LocalDate, List<Event>>,
 ): List<List<CalendarDateCell>> {
     val firstDay = selectedDate.withDayOfMonth(1)
-    val leadingEmptyCells = firstDay.dayOfWeek.value - 1
-    val daysInMonth = selectedDate.lengthOfMonth()
+    val leadingDays = firstDay.dayOfWeek.value % 7
+    val gridStart = firstDay.minusDays(leadingDays.toLong())
     val cells = buildList {
-        repeat(leadingEmptyCells) {
-            add(CalendarDateCell(date = null))
-        }
-        (1..daysInMonth).forEach { day ->
-            val date = selectedDate.withDayOfMonth(day)
+        repeat(42) { offset ->
+            val date = gridStart.plusDays(offset.toLong())
+            val specialDay = chineseSpecialDayMap(date.year)[date]
             add(
                 CalendarDateCell(
                     date = date,
-                    eventCount = eventCounts[date].orZero(),
-                    holiday = holidays[date],
+                    isCurrentMonth = date.month == selectedDate.month && date.year == selectedDate.year,
+                    events = eventsByDate[date].orEmpty(),
+                    specialDay = specialDay,
+                    segment = specialDay?.let { rangeSegmentFor(date, it) } ?: CalendarRangeSegment.Single,
                 ),
             )
-        }
-        while (size % 7 != 0) {
-            add(CalendarDateCell(date = null))
         }
     }
     return cells.chunked(7)
 }
 
-private fun List<Event>.countByDate(): Map<LocalDate, Int> =
-    mapNotNull { event -> event.startAt.toLocalDateOrNull() }
-        .groupingBy { it }
-        .eachCount()
+private fun rangeSegmentFor(
+    date: LocalDate,
+    specialDay: CalendarSpecialDay,
+): CalendarRangeSegment {
+    val previousDate = date.minusDays(1)
+    val nextDate = date.plusDays(1)
+    val previous = chineseSpecialDayMap(previousDate.year)[previousDate]
+    val next = chineseSpecialDayMap(nextDate.year)[nextDate]
+    val hasPrevious = previous == specialDay
+    val hasNext = next == specialDay
+    return when {
+        hasPrevious && hasNext -> CalendarRangeSegment.Middle
+        hasPrevious -> CalendarRangeSegment.End
+        hasNext -> CalendarRangeSegment.Start
+        else -> CalendarRangeSegment.Single
+    }
+}
+
+private fun List<Event>.groupByDate(): Map<LocalDate, List<Event>> =
+    mapNotNull { event ->
+        event.startAt.toLocalDateOrNull()?.let { date -> date to event }
+    }.groupBy(
+        keySelector = { it.first },
+        valueTransform = { it.second },
+    )
 
 private fun String.toLocalDateOrNull(): LocalDate? =
     runCatching { java.time.OffsetDateTime.parse(this).toLocalDate() }.getOrNull()
-
-private fun Int?.orZero(): Int = this ?: 0
 
 private fun LocalDate.getLunarDayString(): String {
     return try {
@@ -603,27 +849,53 @@ private fun LocalDate.getLunarDayString(): String {
     }
 }
 
-private fun chineseHolidayMap(year: Int): Map<LocalDate, String> = when (year) {
+internal fun chineseSpecialDayMap(year: Int): Map<LocalDate, CalendarSpecialDay> = when (year) {
     2026 -> buildMap {
-        putHolidayRange(LocalDate.of(2026, 1, 1), LocalDate.of(2026, 1, 3), "元旦")
-        putHolidayRange(LocalDate.of(2026, 2, 15), LocalDate.of(2026, 2, 23), "春节")
-        putHolidayRange(LocalDate.of(2026, 4, 4), LocalDate.of(2026, 4, 6), "清明")
-        putHolidayRange(LocalDate.of(2026, 5, 1), LocalDate.of(2026, 5, 5), "劳动")
-        putHolidayRange(LocalDate.of(2026, 6, 19), LocalDate.of(2026, 6, 21), "端午")
-        putHolidayRange(LocalDate.of(2026, 9, 25), LocalDate.of(2026, 9, 27), "中秋")
-        putHolidayRange(LocalDate.of(2026, 10, 1), LocalDate.of(2026, 10, 7), "国庆")
+        putSpecialRange(LocalDate.of(2026, 1, 1), LocalDate.of(2026, 1, 3), "元旦", CalendarDayKind.Rest)
+        putSpecialDay(LocalDate.of(2026, 1, 4), CalendarDayKind.Work)
+        putSpecialRange(LocalDate.of(2026, 2, 15), LocalDate.of(2026, 2, 23), "春节", CalendarDayKind.Rest)
+        putSpecialDay(LocalDate.of(2026, 2, 14), CalendarDayKind.Work)
+        putSpecialDay(LocalDate.of(2026, 2, 28), CalendarDayKind.Work)
+        putSpecialRange(LocalDate.of(2026, 4, 4), LocalDate.of(2026, 4, 6), "清明", CalendarDayKind.Rest)
+        putSpecialRange(LocalDate.of(2026, 5, 1), LocalDate.of(2026, 5, 5), "劳动节", CalendarDayKind.Rest)
+        putSpecialDay(LocalDate.of(2026, 5, 9), CalendarDayKind.Work)
+        putSpecialRange(LocalDate.of(2026, 6, 19), LocalDate.of(2026, 6, 21), "端午", CalendarDayKind.Rest)
+        putSpecialRange(LocalDate.of(2026, 9, 25), LocalDate.of(2026, 9, 27), "中秋", CalendarDayKind.Rest)
+        putSpecialDay(LocalDate.of(2026, 9, 20), CalendarDayKind.Work)
+        putSpecialRange(LocalDate.of(2026, 10, 1), LocalDate.of(2026, 10, 7), "国庆", CalendarDayKind.Rest)
+        putSpecialDay(LocalDate.of(2026, 10, 10), CalendarDayKind.Work)
     }
     else -> emptyMap()
 }
 
-private fun MutableMap<LocalDate, String>.putHolidayRange(
+private fun MutableMap<LocalDate, CalendarSpecialDay>.putSpecialRange(
     start: LocalDate,
     endInclusive: LocalDate,
     label: String,
+    kind: CalendarDayKind,
 ) {
     var date = start
     while (!date.isAfter(endInclusive)) {
-        this[date] = label
+        this[date] = CalendarSpecialDay(label = label, kind = kind)
         date = date.plusDays(1)
     }
 }
+
+private fun MutableMap<LocalDate, CalendarSpecialDay>.putSpecialDay(
+    date: LocalDate,
+    kind: CalendarDayKind,
+) {
+    this[date] = CalendarSpecialDay(
+        label = when (kind) {
+            CalendarDayKind.Rest -> "休"
+            CalendarDayKind.Work -> "班"
+        },
+        kind = kind,
+    )
+}
+
+internal fun calendarEventColorSlot(eventId: String): Int =
+    Math.floorMod(eventId.hashCode(), CalendarEventColors.size)
+
+private fun Event.calendarMarkerColor(): Color =
+    CalendarEventColors[calendarEventColorSlot(id)]

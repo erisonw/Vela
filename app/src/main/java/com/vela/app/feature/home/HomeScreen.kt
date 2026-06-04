@@ -140,13 +140,23 @@ fun HomeScreen(
         )
     }
     val hasReminders = uiState.events.any { it.reminders.isNotEmpty() }
+    val canPostNotifications = NotificationPermissionState.canPostNotifications(context)
+    val needsExactAlarmPermission =
+        hasReminders && NotificationPermissionState.needsExactAlarmPermission(context)
     val shouldShowNotificationWarning =
         notificationPermissionDenied ||
-            (hasReminders && !NotificationPermissionState.canPostNotifications(context))
+            (hasReminders && !canPostNotifications) ||
+            needsExactAlarmPermission
 
-    fun requestNotificationPermissionIfNeeded(event: Event) {
-        if (event.reminders.isNotEmpty() && NotificationPermissionState.needsRuntimePermission(context)) {
-            notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+    fun requestReminderPermissionsIfNeeded(event: Event) {
+        if (event.reminders.isEmpty()) {
+            return
+        }
+        when {
+            NotificationPermissionState.needsRuntimePermission(context) ->
+                notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+            NotificationPermissionState.needsExactAlarmPermission(context) ->
+                NotificationPermissionState.requestExactAlarmPermission(context)
         }
     }
 
@@ -191,7 +201,11 @@ fun HomeScreen(
                 }
                     if (shouldShowNotificationWarning) {
                         Spacer(modifier = Modifier.height(10.dp))
-                        NotificationPermissionCard()
+                        NotificationPermissionCard(
+                            onExactAlarmClick = {
+                                NotificationPermissionState.requestExactAlarmPermission(context)
+                            },
+                        )
                     }
             }
 
@@ -322,7 +336,7 @@ fun HomeScreen(
             onDismiss = { isCreatingEvent = false },
             onSave = { event ->
                 viewModel.addEvent(event)
-                requestNotificationPermissionIfNeeded(event)
+                requestReminderPermissionsIfNeeded(event)
                 coroutineScope.launch {
                     VelaWidgetUpdater.updateAll(context)
                 }
@@ -339,7 +353,7 @@ fun HomeScreen(
             onDismiss = { editingEvent = null },
             onSave = { updatedEvent ->
                 viewModel.updateEvent(updatedEvent)
-                requestNotificationPermissionIfNeeded(updatedEvent)
+                requestReminderPermissionsIfNeeded(updatedEvent)
                 coroutineScope.launch {
                     VelaWidgetUpdater.updateAll(context)
                 }
@@ -710,19 +724,45 @@ private fun EmptyHomeCard(onImportChatClick: () -> Unit) {
 }
 
 @Composable
-private fun NotificationPermissionCard() {
+private fun NotificationPermissionCard(
+    onExactAlarmClick: () -> Unit,
+) {
+    val context = LocalContext.current
+    val canPostNotifications = NotificationPermissionState.canPostNotifications(context)
+    val needsExactAlarmPermission = NotificationPermissionState.needsExactAlarmPermission(context)
     Card(
         modifier = Modifier.fillMaxWidth(),
         colors = CardDefaults.cardColors(
             containerColor = MaterialTheme.colorScheme.errorContainer,
         ),
     ) {
-        Text(
+        Column(
             modifier = Modifier.padding(12.dp),
-            text = "通知权限未开启，日程会保存，但系统提醒可能无法弹出。",
-            style = MaterialTheme.typography.bodyMedium,
-            color = MaterialTheme.colorScheme.onErrorContainer,
-        )
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            Text(
+                text = "提醒权限需要确认",
+                style = MaterialTheme.typography.titleSmall,
+                color = MaterialTheme.colorScheme.onErrorContainer,
+            )
+            if (!canPostNotifications) {
+                Text(
+                    text = "通知权限未开启，系统提醒可能无法弹出。",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onErrorContainer,
+                )
+            }
+            if (needsExactAlarmPermission) {
+                Text(
+                    text = "精确提醒未开启，省电模式下可能延迟。",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onErrorContainer,
+                )
+                TextButton(onClick = onExactAlarmClick) {
+                    Text(text = "开启精确提醒")
+                }
+            }
+        }
     }
 }
 
