@@ -469,9 +469,12 @@ fun ImportChatScreen(
         }
     }
 
-    fun requestNotificationPermissionIfNeeded() {
-        if (NotificationPermissionState.needsRuntimePermission(context)) {
-            notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+    fun requestReminderPermissionsIfNeeded() {
+        when {
+            NotificationPermissionState.needsRuntimePermission(context) ->
+                notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+            NotificationPermissionState.needsExactAlarmPermission(context) ->
+                NotificationPermissionState.requestExactAlarmPermission(context)
         }
     }
 
@@ -490,7 +493,7 @@ fun ImportChatScreen(
     fun importSelectedCandidates() {
         val result = viewModel.importSelected()
         if (result.isSuccess) {
-            requestNotificationPermissionIfNeeded()
+            requestReminderPermissionsIfNeeded()
             coroutineScope.launch {
                 VelaWidgetUpdater.updateAll(context)
             }
@@ -500,7 +503,7 @@ fun ImportChatScreen(
     fun importSingleCandidate(candidateId: String) {
         val result = viewModel.importCandidate(candidateId)
         if (result.isSuccess) {
-            requestNotificationPermissionIfNeeded()
+            requestReminderPermissionsIfNeeded()
             coroutineScope.launch {
                 VelaWidgetUpdater.updateAll(context)
             }

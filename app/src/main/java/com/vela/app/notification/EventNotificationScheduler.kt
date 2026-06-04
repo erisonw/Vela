@@ -15,6 +15,13 @@ import java.time.OffsetDateTime
 import java.time.format.DateTimeFormatter
 import java.util.Locale
 
+internal enum class AlarmScheduleMode {
+    ExactAllowWhileIdle,
+    Exact,
+    InexactAllowWhileIdle,
+    Inexact,
+}
+
 object EventNotificationScheduler {
     const val ChannelId = "vela_event_reminders"
     private const val ChannelName = "日程提醒"
@@ -112,19 +119,20 @@ object EventNotificationScheduler {
             flags = PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
         ) ?: return
 
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-            alarmManager.setAndAllowWhileIdle(
-                AlarmManager.RTC_WAKEUP,
-                triggerAtMillis,
-                pendingIntent,
-            )
+        val canScheduleExactAlarms = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            alarmManager.canScheduleExactAlarms()
         } else {
-            alarmManager.set(
-                AlarmManager.RTC_WAKEUP,
-                triggerAtMillis,
-                pendingIntent,
-            )
+            true
         }
+        scheduleAlarm(
+            alarmManager = alarmManager,
+            triggerAtMillis = triggerAtMillis,
+            pendingIntent = pendingIntent,
+            mode = reminderAlarmMode(
+                sdkInt = Build.VERSION.SDK_INT,
+                canScheduleExactAlarms = canScheduleExactAlarms,
+            ),
+        )
     }
 
     private fun scheduleAdvicePreparation(
@@ -158,6 +166,63 @@ object EventNotificationScheduler {
                 prepareAtMillis,
                 pendingIntent,
             )
+        }
+    }
+
+    internal fun reminderAlarmMode(
+        sdkInt: Int,
+        canScheduleExactAlarms: Boolean,
+    ): AlarmScheduleMode =
+        when {
+            sdkInt >= Build.VERSION_CODES.S && canScheduleExactAlarms -> AlarmScheduleMode.ExactAllowWhileIdle
+            sdkInt >= Build.VERSION_CODES.S -> AlarmScheduleMode.InexactAllowWhileIdle
+            sdkInt >= Build.VERSION_CODES.M -> AlarmScheduleMode.ExactAllowWhileIdle
+            else -> AlarmScheduleMode.Exact
+        }
+
+    private fun scheduleAlarm(
+        alarmManager: AlarmManager,
+        triggerAtMillis: Long,
+        pendingIntent: PendingIntent,
+        mode: AlarmScheduleMode,
+    ) {
+        try {
+            when (mode) {
+                AlarmScheduleMode.ExactAllowWhileIdle -> alarmManager.setExactAndAllowWhileIdle(
+                    AlarmManager.RTC_WAKEUP,
+                    triggerAtMillis,
+                    pendingIntent,
+                )
+                AlarmScheduleMode.Exact -> alarmManager.setExact(
+                    AlarmManager.RTC_WAKEUP,
+                    triggerAtMillis,
+                    pendingIntent,
+                )
+                AlarmScheduleMode.InexactAllowWhileIdle -> alarmManager.setAndAllowWhileIdle(
+                    AlarmManager.RTC_WAKEUP,
+                    triggerAtMillis,
+                    pendingIntent,
+                )
+                AlarmScheduleMode.Inexact -> alarmManager.set(
+                    AlarmManager.RTC_WAKEUP,
+                    triggerAtMillis,
+                    pendingIntent,
+                )
+            }
+        } catch (_: SecurityException) {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                alarmManager.setAndAllowWhileIdle(
+                    AlarmManager.RTC_WAKEUP,
+                    triggerAtMillis,
+                    pendingIntent,
+                )
+            } else {
+                alarmManager.set(
+                    AlarmManager.RTC_WAKEUP,
+                    triggerAtMillis,
+                    pendingIntent,
+                )
+            }
         }
     }
 

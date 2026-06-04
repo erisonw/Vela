@@ -203,6 +203,12 @@ object MockVelaRepository : VelaRepository {
         syncSessionAndWidgetSnapshot()
     }
 
+    fun rescheduleReminders(context: Context) {
+        val applicationContext = context.applicationContext
+        initialize(applicationContext)
+        scheduleAllRemindersAsync(applicationContext, _events.value)
+    }
+
     override fun submitImportText(text: String): ImportSubmissionResult {
         val trimmedText = text.trim()
         if (trimmedText.isBlank()) {
