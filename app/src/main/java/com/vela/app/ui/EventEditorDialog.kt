@@ -153,6 +153,7 @@ fun EventEditorDialog(
                             description = description.trim().ifBlank { null },
                             reminders = remindersFromPreset(reminderMinutes),
                             sourceSessionId = initialEvent?.sourceSessionId,
+                            isCourse = initialEvent?.isCourse == true,
                         ),
                     )
                 },

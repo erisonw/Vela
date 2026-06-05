@@ -3,7 +3,6 @@ package com.vela.app.feature.home
 import android.Manifest
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -23,7 +22,6 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.ElevatedCard
@@ -45,10 +43,8 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
-import com.vela.app.R
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewModelScope
@@ -113,6 +109,7 @@ fun HomeScreen(
     eventId: String?,
     onImportChatClick: () -> Unit,
     onCalendarClick: () -> Unit,
+    onTimetableClick: () -> Unit,
     onEventClick: (String) -> Unit,
     viewModel: HomeViewModel = viewModel(),
 ) {
@@ -173,158 +170,141 @@ fun HomeScreen(
         modifier = Modifier
             .fillMaxSize()
             .background(VelaPageBackground),
-        contentPadding = PaddingValues(18.dp),
-        verticalArrangement = Arrangement.spacedBy(14.dp),
+        contentPadding = PaddingValues(horizontal = 14.dp, vertical = 12.dp),
+        verticalArrangement = Arrangement.spacedBy(10.dp),
     ) {
-            item {
-                ScheduleHero(
-                    onCreateClick = { isCreatingEvent = true },
-                    onImportChatClick = onImportChatClick,
-                )
+        item {
+            ScheduleTopBar(
+                onCreateClick = { isCreatingEvent = true },
+                onTomorrowClick = { showTomorrowPreview = true },
+                onTimetableClick = onTimetableClick,
+            )
+            if (shouldShowNotificationWarning) {
                 Spacer(modifier = Modifier.height(10.dp))
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(10.dp),
-                ) {
-                    OutlinedButton(
-                        modifier = Modifier.weight(1f),
-                        onClick = { showTomorrowPreview = true },
-                    ) {
-                        Text(text = "明日预告")
-                    }
-                    OutlinedButton(
-                        modifier = Modifier.weight(1f),
-                        onClick = onCalendarClick,
-                    ) {
-                        Text(text = "日历")
-                    }
-                }
-                    if (shouldShowNotificationWarning) {
-                        Spacer(modifier = Modifier.height(10.dp))
-                        NotificationPermissionCard(
-                            onExactAlarmClick = {
-                                NotificationPermissionState.requestExactAlarmPermission(context)
-                            },
-                        )
-                    }
+                NotificationPermissionCard(
+                    onExactAlarmClick = {
+                        NotificationPermissionState.requestExactAlarmPermission(context)
+                    },
+                )
             }
+        }
 
-            if (eventId != null) {
-                item {
-                    if (selectedEvent == null) {
-                        MissingEventCard(eventId = eventId)
-                    } else {
-                        EventDetailCard(
-                            event = selectedEvent,
-                            onEdit = { editingEvent = selectedEvent },
-                            onDelete = { deletingEvent = selectedEvent },
-                        )
-                    }
-                }
-            }
-
+        if (eventId != null) {
             item {
-                uiState.widgetSnapshot?.let { snapshot ->
-                    ElevatedCard(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .shadow(10.dp, RoundedCornerShape(24.dp)),
-                        shape = RoundedCornerShape(24.dp),
-                        colors = CardDefaults.cardColors(
-                            containerColor = Color(0xFFF3F6FF),
-                        ),
-                    ) {
-                        Column(
-                            modifier = Modifier.padding(16.dp),
-                            verticalArrangement = Arrangement.spacedBy(6.dp),
-                        ) {
-                            Text(
-                                text = snapshot.title,
-                                style = MaterialTheme.typography.titleMedium,
-                                color = VelaTextPrimary,
-                                fontWeight = FontWeight.Bold,
-                            )
-                            Text(
-                                text = snapshot.nextEvent?.title ?: "暂无后续日程",
-                                style = MaterialTheme.typography.bodyLarge,
-                                color = VelaTextPrimary,
-                            )
-                            Text(
-                                text = "剩余日程 ${snapshot.remainingEventCount} 个 | 待确认候选 ${snapshot.pendingCandidateCount} 个",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = VelaTextSecondary,
-                            )
-                            Text(
-                                text = "${snapshot.weatherHint} | ${snapshot.prepHint}",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = VelaTextSecondary,
-                            )
-                            Text(
-                                text = snapshot.weatherStatusText,
-                                style = MaterialTheme.typography.labelMedium,
-                                color = Color(0xFF6476FF),
-                            )
-                            Text(
-                                text = "${snapshot.generatedAt.toDisplayTime()} 更新",
-                                style = MaterialTheme.typography.labelMedium,
-                                color = VelaTextSecondary,
-                            )
-                        }
-                    }
-                }
-            }
-
-            if (uiState.events.isEmpty()) {
-                item {
-                    HomeSectionHeader(
-                        title = "即将开始",
-                        subtitle = "未来安排会优先显示在这里",
+                if (selectedEvent == null) {
+                    MissingEventCard(eventId = eventId)
+                } else {
+                    EventDetailCard(
+                        event = selectedEvent,
+                        onEdit = { editingEvent = selectedEvent },
+                        onDelete = { deletingEvent = selectedEvent },
                     )
                 }
+            }
+        }
+
+        item {
+            uiState.widgetSnapshot?.let { snapshot ->
+                ElevatedCard(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .shadow(6.dp, RoundedCornerShape(18.dp)),
+                    shape = RoundedCornerShape(18.dp),
+                    colors = CardDefaults.cardColors(
+                        containerColor = Color(0xFFF3F6FF),
+                    ),
+                ) {
+                    Column(
+                        modifier = Modifier.padding(horizontal = 14.dp, vertical = 12.dp),
+                        verticalArrangement = Arrangement.spacedBy(3.dp),
+                    ) {
+                        Text(
+                            text = snapshot.title,
+                            style = MaterialTheme.typography.titleSmall,
+                            color = VelaTextPrimary,
+                            fontWeight = FontWeight.Bold,
+                        )
+                        Text(
+                            text = snapshot.nextEvent?.title ?: "暂无后续日程",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = VelaTextPrimary,
+                        )
+                        Text(
+                            text = "剩余日程 ${snapshot.remainingEventCount} 个 | 待确认候选 ${snapshot.pendingCandidateCount} 个",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = VelaTextSecondary,
+                        )
+                        Text(
+                            text = "${snapshot.weatherHint} | ${snapshot.prepHint}",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = VelaTextSecondary,
+                        )
+                        Text(
+                            text = snapshot.weatherStatusText,
+                            style = MaterialTheme.typography.labelSmall,
+                            color = Color(0xFF6476FF),
+                        )
+                        Text(
+                            text = "${snapshot.generatedAt.toDisplayTime()} 更新",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = VelaTextSecondary,
+                        )
+                    }
+                }
+            }
+        }
+
+        if (uiState.events.isEmpty()) {
+            item {
+                HomeSectionHeader(
+                    title = "即将开始",
+                    subtitle = "未来安排会优先显示在这里",
+                )
+            }
+            item {
+                EmptyHomeCard(onImportChatClick = onImportChatClick)
+            }
+        } else {
+            item {
+                HomeSectionHeader(
+                    title = "今天 ${LocalDate.now(ZoneId.of("Asia/Shanghai")).monthValue}月${LocalDate.now(ZoneId.of("Asia/Shanghai")).dayOfMonth}日",
+                    subtitle = if (homeTimeline.upcomingEvents.isEmpty()) {
+                        "今天后面没有未完成日程"
+                    } else {
+                        "${homeTimeline.upcomingEvents.size} 个日程"
+                    },
+                )
+            }
+            if (homeTimeline.upcomingEvents.isEmpty()) {
                 item {
-                    EmptyHomeCard(onImportChatClick = onImportChatClick)
+                    EmptyUpcomingCard(onCalendarClick = onCalendarClick)
                 }
             } else {
-                item {
-                    HomeSectionHeader(
-                        title = "今天 ${LocalDate.now(ZoneId.of("Asia/Shanghai")).monthValue}月${LocalDate.now(ZoneId.of("Asia/Shanghai")).dayOfMonth}日",
-                        subtitle = if (homeTimeline.upcomingEvents.isEmpty()) {
-                            "今天后面没有未完成日程"
-                        } else {
-                            "${homeTimeline.upcomingEvents.size} 个日程"
-                        },
+                items(homeTimeline.upcomingEvents, key = { it.id }) { event ->
+                    EventRow(
+                        event = event,
+                        isPast = false,
+                        onClick = { onEventClick(event.id) },
                     )
                 }
-                if (homeTimeline.upcomingEvents.isEmpty()) {
-                    item {
-                        EmptyUpcomingCard(onCalendarClick = onCalendarClick)
-                    }
-                } else {
-                    items(homeTimeline.upcomingEvents, key = { it.id }) { event ->
-                        EventRow(
-                            event = event,
-                            isPast = false,
-                            onClick = { onEventClick(event.id) },
-                        )
-                    }
-                }
+            }
 
-                if (homeTimeline.completedEvents.isNotEmpty()) {
-                    item {
-                        HomeSectionHeader(
-                            title = "已结束",
-                            subtitle = "${homeTimeline.completedEvents.size.coerceAtMost(3)} 个日程",
-                        )
-                    }
-                    items(homeTimeline.completedEvents.take(3), key = { "past-${it.id}" }) { event ->
-                        EventRow(
-                            event = event,
-                            isPast = true,
-                            onClick = { onEventClick(event.id) },
-                        )
-                    }
+            if (homeTimeline.completedEvents.isNotEmpty()) {
+                item {
+                    HomeSectionHeader(
+                        title = "已结束",
+                        subtitle = "${homeTimeline.completedEvents.size.coerceAtMost(3)} 个日程",
+                    )
+                }
+                items(homeTimeline.completedEvents.take(3), key = { "past-${it.id}" }) { event ->
+                    EventRow(
+                        event = event,
+                        isPast = true,
+                        onClick = { onEventClick(event.id) },
+                    )
                 }
             }
+        }
     }
 
     if (isCreatingEvent) {
@@ -385,61 +365,107 @@ fun HomeScreen(
 }
 
 @Composable
-private fun ScheduleHero(
+private fun ScheduleTopBar(
     onCreateClick: () -> Unit,
-    onImportChatClick: () -> Unit,
+    onTomorrowClick: () -> Unit,
+    onTimetableClick: () -> Unit,
 ) {
-    Column(verticalArrangement = Arrangement.spacedBy(18.dp)) {
+    val today = LocalDate.now(ZoneId.of("Asia/Shanghai"))
+    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
         Row(
             modifier = Modifier.fillMaxWidth(),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            Image(
-                modifier = Modifier
-                    .size(64.dp)
-                    .clip(RoundedCornerShape(18.dp))
-                    .shadow(8.dp, RoundedCornerShape(18.dp)),
-                painter = painterResource(id = R.mipmap.ic_launcher),
-                contentDescription = "Vela",
-            )
-            Spacer(modifier = Modifier.width(14.dp))
             Column(modifier = Modifier.weight(1f)) {
                 Text(
                     text = "日程",
-                    style = MaterialTheme.typography.headlineLarge,
+                    style = MaterialTheme.typography.titleLarge,
                     fontWeight = FontWeight.Bold,
                     color = VelaTextPrimary,
                 )
                 Text(
-                    text = "管理您的日程安排，高效规划每一天",
-                    style = MaterialTheme.typography.bodyMedium,
+                    text = "${today.monthValue}月${today.dayOfMonth}日 · ${today.weekdayText()}",
+                    style = MaterialTheme.typography.bodySmall,
                     color = VelaTextSecondary,
+                )
+            }
+            Surface(
+                shape = RoundedCornerShape(16.dp),
+                color = Color(0xFFEAF0FF),
+            ) {
+                Text(
+                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp),
+                    text = "今天",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = Color(0xFF6476FF),
+                    fontWeight = FontWeight.SemiBold,
                 )
             }
         }
         Row(
             modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(12.dp),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
         ) {
-            Button(
-                modifier = Modifier
-                    .weight(1f)
-                    .height(54.dp),
+            ScheduleActionChip(
+                modifier = Modifier.weight(1f),
+                text = "新建",
+                containerColor = Color(0xFF12162A),
+                contentColor = Color.White,
                 onClick = onCreateClick,
-                shape = RoundedCornerShape(27.dp),
-            ) {
-                Text(text = "创建日程")
-            }
-            OutlinedButton(
-                modifier = Modifier
-                    .weight(1f)
-                    .height(54.dp),
-                onClick = onImportChatClick,
-                shape = RoundedCornerShape(27.dp),
-            ) {
-                Text(text = "AI 日程")
-            }
+            )
+            ScheduleActionChip(
+                modifier = Modifier.weight(1f),
+                text = "明日",
+                containerColor = Color(0xFFEAF0FF),
+                contentColor = Color(0xFF6476FF),
+                onClick = onTomorrowClick,
+            )
+            ScheduleActionChip(
+                modifier = Modifier.weight(1f),
+                text = "课表",
+                containerColor = Color(0xFFFFF1E7),
+                contentColor = Color(0xFFD65A31),
+                onClick = onTimetableClick,
+            )
+            ScheduleActionChip(
+                modifier = Modifier.weight(1f),
+                text = "预留",
+                containerColor = Color(0xFFF1F2F5),
+                contentColor = VelaTextSecondary,
+                enabled = false,
+                onClick = {},
+            )
         }
+    }
+}
+
+@Composable
+private fun ScheduleActionChip(
+    text: String,
+    containerColor: Color,
+    contentColor: Color,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+    enabled: Boolean = true,
+) {
+    val resolvedContainerColor = if (enabled) containerColor else Color(0xFFF2F3F6)
+    val resolvedContentColor = if (enabled) contentColor else VelaTextSecondary.copy(alpha = 0.58f)
+    Box(
+        modifier = modifier
+            .height(36.dp)
+            .clip(RoundedCornerShape(14.dp))
+            .background(resolvedContainerColor)
+            .clickable(enabled = enabled, onClick = onClick)
+            .padding(horizontal = 8.dp),
+        contentAlignment = Alignment.Center,
+    ) {
+        Text(
+            text = text,
+            style = MaterialTheme.typography.labelMedium,
+            fontWeight = FontWeight.SemiBold,
+            color = resolvedContentColor,
+            maxLines = 1,
+        )
     }
 }
 
@@ -564,17 +590,17 @@ private fun HomeSectionHeader(
     ) {
         Box(
             modifier = Modifier
-                .size(30.dp)
+                .size(24.dp)
                 .background(Color(0xFFEAF0FF), CircleShape),
             contentAlignment = Alignment.Center,
         ) {
             Text(text = "历", color = Color(0xFF2D6BFF), style = MaterialTheme.typography.labelSmall)
         }
-        Spacer(modifier = Modifier.width(10.dp))
+        Spacer(modifier = Modifier.width(8.dp))
         Text(
             modifier = Modifier.weight(1f),
             text = title,
-            style = MaterialTheme.typography.titleMedium,
+            style = MaterialTheme.typography.titleSmall,
             color = VelaTextPrimary,
             fontWeight = FontWeight.Bold,
         )
@@ -583,7 +609,7 @@ private fun HomeSectionHeader(
             color = Color(0xFFEAF0FF),
         ) {
             Text(
-                modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp),
+                modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp),
                 text = subtitle,
                 style = MaterialTheme.typography.labelSmall,
                 color = Color(0xFF6476FF),
@@ -602,9 +628,9 @@ private fun EventRow(
     Card(
         modifier = Modifier
             .fillMaxWidth()
-            .shadow(8.dp, RoundedCornerShape(18.dp))
+            .shadow(4.dp, RoundedCornerShape(14.dp))
             .clickable(onClick = onClick),
-        shape = RoundedCornerShape(18.dp),
+        shape = RoundedCornerShape(14.dp),
         colors = CardDefaults.cardColors(
             containerColor = if (isPast) {
                 Color(0xFFF4F6FB)
@@ -614,19 +640,19 @@ private fun EventRow(
         ),
     ) {
         Row(
-            modifier = Modifier.padding(14.dp),
-            horizontalArrangement = Arrangement.spacedBy(14.dp),
+            modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Box(
                 modifier = Modifier
-                    .width(5.dp)
-                    .height(82.dp)
+                    .width(4.dp)
+                    .height(52.dp)
                     .background(accentColor, RoundedCornerShape(12.dp)),
             )
             Box(
                 modifier = Modifier
-                    .size(48.dp)
+                    .size(34.dp)
                     .background(accentColor.copy(alpha = 0.12f), CircleShape),
                 contentAlignment = Alignment.Center,
             ) {
@@ -641,7 +667,7 @@ private fun EventRow(
                     Text(
                         modifier = Modifier.weight(1f),
                         text = event.title,
-                        style = MaterialTheme.typography.titleMedium,
+                        style = MaterialTheme.typography.titleSmall,
                         fontWeight = FontWeight.Bold,
                         color = VelaTextPrimary,
                     )
@@ -650,29 +676,21 @@ private fun EventRow(
                         color = accentColor.copy(alpha = 0.10f),
                     ) {
                         Text(
-                            modifier = Modifier.padding(horizontal = 9.dp, vertical = 4.dp),
+                            modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
                             text = event.categoryLabel(),
                             style = MaterialTheme.typography.labelSmall,
                             color = accentColor,
                         )
                     }
                 }
-                Spacer(modifier = Modifier.height(8.dp))
+                Spacer(modifier = Modifier.height(4.dp))
                 Text(
-                    text = "时间  ${event.toDisplayTimeRange()}",
-                    style = MaterialTheme.typography.bodyMedium,
+                    text = event.toCompactMetaText(),
+                    style = MaterialTheme.typography.bodySmall,
                     color = VelaTextSecondary,
                 )
-                event.location?.name?.let { locationName ->
-                    Spacer(modifier = Modifier.height(4.dp))
-                    Text(
-                        text = "地点  $locationName",
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = VelaTextSecondary,
-                    )
-                }
             }
-            Text(text = "⋮", color = VelaTextSecondary, style = MaterialTheme.typography.titleLarge)
+            Text(text = "⋮", color = VelaTextSecondary, style = MaterialTheme.typography.titleMedium)
         }
     }
 }
@@ -833,6 +851,15 @@ private fun Event.toDisplayTimeRange(): String {
     return if (end == null) start else "$start-$end"
 }
 
+private fun Event.toCompactMetaText(): String {
+    val locationName = location?.name?.takeIf { it.isNotBlank() }
+    return if (locationName == null) {
+        toDisplayTimeRange()
+    } else {
+        "${toDisplayTimeRange()} · $locationName"
+    }
+}
+
 private fun Event.toDisplayDateTimeRange(): String {
     val start = "${startAt.toDisplayDate()} ${startAt.toDisplayTime()}"
     val end = endAt?.let { "${it.toDisplayDate()} ${it.toDisplayTime()}" }
@@ -943,6 +970,17 @@ private fun String.toDisplayDate(): String = substringBefore("T")
 
 private fun String.toDisplayTime(): String = substringAfter("T", this)
     .take(5)
+
+private fun LocalDate.weekdayText(): String =
+    "周" + when (dayOfWeek.value) {
+        1 -> "一"
+        2 -> "二"
+        3 -> "三"
+        4 -> "四"
+        5 -> "五"
+        6 -> "六"
+        else -> "日"
+    }
 
 private val VelaPageBackground = Color(0xFFFAFBFF)
 private val VelaTextPrimary = Color(0xFF12162A)

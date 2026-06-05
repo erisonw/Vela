@@ -121,7 +121,7 @@ class HttpVoiceTranscriptionClient(
             .jsonObject["text"]
             ?.jsonPrimitive
             ?.contentOrNull
-            ?.trim()
+            ?.toCleanVoiceTranscript()
             .orEmpty()
         return if (transcript.isBlank()) {
             VoiceTranscriptionResult.Failure(
@@ -162,6 +162,28 @@ object UnavailableVoiceTranscriptionClient : VoiceTranscriptionClient {
             retryable = true,
         )
 }
+
+internal fun String.toCleanVoiceTranscript(): String {
+    val trimmed = trim()
+    val normalized = trimmed
+        .replace(Regex("\\s+"), "")
+        .replace("请", "請")
+        .replace("点赞", "點贊")
+        .replace("订阅", "訂閱")
+        .replace("转发", "轉發")
+        .replace("打赏", "打賞")
+        .replace("支持明镜", "支持明鏡")
+        .replace("点点栏目", "點點欄目")
+    return if (normalized in SilentTranscriptionHallucinations) {
+        ""
+    } else {
+        trimmed
+    }
+}
+
+private val SilentTranscriptionHallucinations = setOf(
+    "請不吝點贊訂閱轉發打賞支持明鏡與點點欄目",
+)
 
 private fun DataOutputStream.writeFormField(
     boundary: String,

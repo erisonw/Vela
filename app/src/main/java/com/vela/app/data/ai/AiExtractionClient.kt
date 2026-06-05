@@ -2,6 +2,7 @@ package com.vela.app.data.ai
 
 import com.vela.app.data.model.EventCandidate
 import com.vela.app.data.model.EventCandidateReviewStatus
+import com.vela.app.data.model.ImportTarget
 import kotlinx.serialization.decodeFromString
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.Serializable
@@ -33,6 +34,7 @@ data class AiExtractionRequest(
     val attachmentIds: List<String> = emptyList(),
     val timezone: String = "Asia/Shanghai",
     val locale: String = "zh-CN",
+    val target: ImportTarget = ImportTarget.Schedule,
 )
 
 @Serializable
@@ -374,7 +376,8 @@ private fun AiExtractionRequest.toOpenAiUserContent(): JsonElement {
         当前时区：$timezone
         语言：$locale
         输入类型：${type.toChineseLabel()}
-        请从用户提供的内容中提取候选日程。
+        导入目标：${target.toChineseLabel()}
+        ${target.toExtractionInstruction()}
     """.trimIndent()
 
     return when (type) {
@@ -386,7 +389,7 @@ private fun AiExtractionRequest.toOpenAiUserContent(): JsonElement {
             """.trimIndent(),
         )
         AiInputType.Image -> buildJsonArray {
-            addTextContentBlock("$prompt\n请识别图片里的日程、课程表、会议或待办时间信息。")
+            addTextContentBlock("$prompt\n请识别图片里的${target.toImageHint()}。")
             attachments.forEach { attachment ->
                 attachment.base64Data?.takeIf { it.isNotBlank() }?.let {
                     addImageContentBlock(attachment)
@@ -449,6 +452,24 @@ private fun AiInputType.toChineseLabel(): String =
     when (this) {
         AiInputType.Text -> "文本"
         AiInputType.Image -> "图片"
+    }
+
+private fun ImportTarget.toChineseLabel(): String =
+    when (this) {
+        ImportTarget.Schedule -> "普通日程"
+        ImportTarget.Timetable -> "课程表"
+    }
+
+private fun ImportTarget.toExtractionInstruction(): String =
+    when (this) {
+        ImportTarget.Schedule -> "请从用户提供的内容中提取候选日程。"
+        ImportTarget.Timetable -> "请只提取课程安排，标题使用课程名，地点优先使用教室或教学楼。"
+    }
+
+private fun ImportTarget.toImageHint(): String =
+    when (this) {
+        ImportTarget.Schedule -> "日程、会议、待办时间或行程信息"
+        ImportTarget.Timetable -> "课程表、上课时间、课程名和教室信息"
     }
 
 private fun String.extractJsonObjectText(): String {

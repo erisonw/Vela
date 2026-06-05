@@ -13,4 +13,5 @@ data class Event(
     val description: String? = null,
     val reminders: List<Reminder> = emptyList(),
     val sourceSessionId: String? = null,
+    val isCourse: Boolean = false,
 )

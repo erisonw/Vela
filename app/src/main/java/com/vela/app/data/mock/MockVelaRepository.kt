@@ -25,12 +25,14 @@ import com.vela.app.data.model.EventCandidate
 import com.vela.app.data.model.EventCandidateReviewStatus
 import com.vela.app.data.model.ImportSession
 import com.vela.app.data.model.ImportSessionStatus
+import com.vela.app.data.model.ImportTarget
 import com.vela.app.data.model.Location
 import com.vela.app.data.model.Reminder
 import com.vela.app.data.model.UserPreferences
 import com.vela.app.data.model.WidgetSnapshot
 import com.vela.app.data.model.remindersFromPreset
 import com.vela.app.data.model.validateEventInput
+import com.vela.app.data.repository.FloatingImportSubmissionResult
 import com.vela.app.data.repository.ImportSubmissionResult
 import com.vela.app.data.repository.ImportResult
 import com.vela.app.data.repository.VelaRepository
@@ -218,14 +220,15 @@ object MockVelaRepository : VelaRepository {
             )
         }
 
-        val session = _importSession.value
-        val messageIndex = session.messages.size + 1
-        val userMessageId = "message-$messageIndex"
-        val assistantMessageId = "message-${messageIndex + 1}"
+        val sessionId = _importSession.value.id
+        appendImportMessage(
+            role = ChatMessageRole.User,
+            content = trimmedText,
+        )
 
         val extractionResult = aiExtractionClient().extract(
             AiExtractionRequest(
-                sessionId = session.id,
+                sessionId = sessionId,
                 type = AiInputType.Text,
                 text = trimmedText,
             ),
@@ -234,29 +237,10 @@ object MockVelaRepository : VelaRepository {
             is AiExtractionResult.Success -> extractionResult.summary
             is AiExtractionResult.Failure -> extractionResult.message
         }
-
-        _importSession.update { currentSession ->
-            currentSession.copy(
-                updatedAt = MockNow,
-                messages = currentSession.messages + listOf(
-                    ChatMessage(
-                        id = userMessageId,
-                        sessionId = currentSession.id,
-                        role = ChatMessageRole.User,
-                        content = trimmedText,
-                        createdAt = MockNow,
-                    ),
-                    ChatMessage(
-                        id = assistantMessageId,
-                        sessionId = currentSession.id,
-                        role = ChatMessageRole.Assistant,
-                        content = assistantText,
-                        createdAt = MockNow,
-                    ),
-                ),
-                candidates = _eventCandidates.value,
-            )
-        }
+        appendImportMessage(
+            role = ChatMessageRole.Assistant,
+            content = assistantText,
+        )
         if (extractionResult is AiExtractionResult.Success) {
             addExtractedCandidates(extractionResult)
         }
@@ -268,10 +252,14 @@ object MockVelaRepository : VelaRepository {
     }
 
     override fun submitImportImage(attachment: AiInputAttachment): ImportSubmissionResult {
-        val session = _importSession.value
+        val sessionId = _importSession.value.id
+        appendImportMessage(
+            role = ChatMessageRole.User,
+            content = "图片上传：${attachment.fileName}",
+        )
         val extractionResult = aiExtractionClient().extract(
             AiExtractionRequest(
-                sessionId = session.id,
+                sessionId = sessionId,
                 type = AiInputType.Image,
                 attachments = listOf(attachment),
                 attachmentIds = listOf(attachment.fileName),
@@ -281,27 +269,10 @@ object MockVelaRepository : VelaRepository {
             is AiExtractionResult.Success -> extractionResult.summary
             is AiExtractionResult.Failure -> extractionResult.message
         }
-        _importSession.update { currentSession ->
-            currentSession.copy(
-                updatedAt = MockNow,
-                messages = currentSession.messages + listOf(
-                    ChatMessage(
-                        id = "message-${session.messages.size + 1}",
-                        sessionId = currentSession.id,
-                        role = ChatMessageRole.User,
-                        content = "图片上传：${attachment.fileName}",
-                        createdAt = MockNow,
-                    ),
-                    ChatMessage(
-                        id = "message-${session.messages.size + 2}",
-                        sessionId = currentSession.id,
-                        role = ChatMessageRole.Assistant,
-                        content = assistantText,
-                        createdAt = MockNow,
-                    ),
-                ),
-            )
-        }
+        appendImportMessage(
+            role = ChatMessageRole.Assistant,
+            content = assistantText,
+        )
         if (extractionResult is AiExtractionResult.Success) {
             addExtractedCandidates(extractionResult)
         }
@@ -323,29 +294,15 @@ object MockVelaRepository : VelaRepository {
                 message = "请输入需要修改的日程指令。",
             )
         }
-        val session = _importSession.value
         val assistantText = "自然语言修改服务暂不可用。当前不会直接修改日历，请到「日程」里手动编辑。"
-        _importSession.update { currentSession ->
-            currentSession.copy(
-                updatedAt = MockNow,
-                messages = currentSession.messages + listOf(
-                    ChatMessage(
-                        id = "message-${session.messages.size + 1}",
-                        sessionId = currentSession.id,
-                        role = ChatMessageRole.User,
-                        content = trimmedInstruction,
-                        createdAt = MockNow,
-                    ),
-                    ChatMessage(
-                        id = "message-${session.messages.size + 2}",
-                        sessionId = currentSession.id,
-                        role = ChatMessageRole.Assistant,
-                        content = assistantText,
-                        createdAt = MockNow,
-                    ),
-                ),
-            )
-        }
+        appendImportMessage(
+            role = ChatMessageRole.User,
+            content = trimmedInstruction,
+        )
+        appendImportMessage(
+            role = ChatMessageRole.Assistant,
+            content = assistantText,
+        )
         syncSessionAndWidgetSnapshot()
         return ImportSubmissionResult(
             isSuccess = false,
@@ -384,6 +341,24 @@ object MockVelaRepository : VelaRepository {
             )
         }
         syncSessionAndWidgetSnapshot()
+    }
+
+    private fun appendImportMessage(
+        role: ChatMessageRole,
+        content: String,
+    ) {
+        _importSession.update { session ->
+            session.copy(
+                updatedAt = MockNow,
+                messages = session.messages + ChatMessage(
+                    id = "message-${session.messages.size + 1}",
+                    sessionId = session.id,
+                    role = role,
+                    content = content,
+                    createdAt = MockNow,
+                ),
+            )
+        }
     }
 
     private fun addExtractedCandidates(extractionResult: AiExtractionResult.Success) {
@@ -472,7 +447,57 @@ object MockVelaRepository : VelaRepository {
         return importCandidates(listOf(candidate))
     }
 
-    private fun importCandidates(selectedCandidates: List<EventCandidate>): ImportResult {
+    override fun submitFloatingImportImage(
+        attachment: AiInputAttachment,
+        target: ImportTarget,
+    ): FloatingImportSubmissionResult {
+        val extractionResult = aiExtractionClient().extract(
+            AiExtractionRequest(
+                sessionId = "floating-${target.name.lowercase()}-${System.currentTimeMillis()}",
+                type = AiInputType.Image,
+                attachments = listOf(attachment),
+                attachmentIds = listOf(attachment.fileName),
+                target = target,
+            ),
+        )
+
+        return when (extractionResult) {
+            is AiExtractionResult.Success -> FloatingImportSubmissionResult(
+                isSuccess = true,
+                message = extractionResult.summary,
+                candidates = extractionResult.candidates.mapIndexed { index, candidate ->
+                    candidate.copy(
+                        id = "candidate-floating-${target.name.lowercase()}-${System.currentTimeMillis()}-$index",
+                        isSelectedForImport = true,
+                        reminders = candidate.reminders.ifEmpty {
+                            remindersFromPreset(_userPreferences.value.defaultReminderMinutes)
+                        },
+                        missingFields = candidate.findMissingFields(),
+                    )
+                },
+            )
+
+            is AiExtractionResult.Failure -> FloatingImportSubmissionResult(
+                isSuccess = false,
+                message = extractionResult.message,
+            )
+        }
+    }
+
+    override fun importFloatingCandidates(
+        candidates: List<EventCandidate>,
+        target: ImportTarget,
+    ): ImportResult = importCandidates(
+        selectedCandidates = candidates,
+        target = target,
+        updateImportSession = false,
+    )
+
+    private fun importCandidates(
+        selectedCandidates: List<EventCandidate>,
+        target: ImportTarget = ImportTarget.Schedule,
+        updateImportSession: Boolean = true,
+    ): ImportResult {
         if (selectedCandidates.isEmpty()) {
             return ImportResult(
                 importedCount = 0,
@@ -491,9 +516,13 @@ object MockVelaRepository : VelaRepository {
         }
 
         val importedEvents = selectedCandidates
-            .map { candidate ->
+            .mapIndexed { index, candidate ->
                 Event(
-                    id = candidate.id.replace("candidate", "event"),
+                    id = if (updateImportSession) {
+                        candidate.id.replace("candidate", "event")
+                    } else {
+                        "event-floating-${target.name.lowercase()}-${System.currentTimeMillis()}-$index"
+                    },
                     title = candidate.title,
                     startAt = candidate.startAt,
                     endAt = candidate.endAt,
@@ -501,7 +530,12 @@ object MockVelaRepository : VelaRepository {
                     location = candidate.location,
                     description = candidate.description,
                     reminders = candidate.reminders,
-                    sourceSessionId = _importSession.value.id,
+                    sourceSessionId = if (updateImportSession) {
+                        _importSession.value.id
+                    } else {
+                        "floating-${target.name.lowercase()}"
+                    },
+                    isCourse = target == ImportTarget.Timetable,
                 )
             }
 
@@ -514,24 +548,26 @@ object MockVelaRepository : VelaRepository {
                 EventNotificationScheduler.scheduleEvent(context, event)
             }
         }
-        _eventCandidates.update { candidates ->
-            candidates.map { candidate ->
-                if (selectedCandidates.any { it.id == candidate.id }) {
-                    candidate.copy(
-                        isSelectedForImport = false,
-                        reviewStatus = EventCandidateReviewStatus.Imported,
-                    )
-                } else {
-                    candidate
+        if (updateImportSession) {
+            _eventCandidates.update { candidates ->
+                candidates.map { candidate ->
+                    if (selectedCandidates.any { it.id == candidate.id }) {
+                        candidate.copy(
+                            isSelectedForImport = false,
+                            reviewStatus = EventCandidateReviewStatus.Imported,
+                        )
+                    } else {
+                        candidate
+                    }
                 }
             }
-        }
-        _importSession.update { session ->
-            session.copy(
-                updatedAt = MockNow,
-                status = ImportSessionStatus.Imported,
-                candidates = _eventCandidates.value,
-            )
+            _importSession.update { session ->
+                session.copy(
+                    updatedAt = MockNow,
+                    status = ImportSessionStatus.Imported,
+                    candidates = _eventCandidates.value,
+                )
+            }
         }
         syncSessionAndWidgetSnapshot()
 
