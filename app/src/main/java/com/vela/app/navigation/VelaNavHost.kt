@@ -25,6 +25,7 @@ import com.vela.app.feature.calendar.CalendarScreen
 import com.vela.app.feature.home.HomeScreen
 import com.vela.app.feature.importchat.ImportChatScreen
 import com.vela.app.feature.settings.SettingsScreen
+import com.vela.app.feature.timetable.TimetableScreen
 
 @Composable
 fun VelaNavHost() {
@@ -34,7 +35,7 @@ fun VelaNavHost() {
     val currentRoute = currentDestination?.route
     val topLevelRoute = when (currentRoute) {
         VelaRoutes.Calendar, VelaRoutes.Activity -> VelaRoutes.Calendar
-        VelaRoutes.Schedule, VelaRoutes.Event, "home" -> VelaRoutes.Schedule
+        VelaRoutes.Schedule, VelaRoutes.Event, VelaRoutes.Timetable, "home" -> VelaRoutes.Schedule
         VelaRoutes.AiSchedule, VelaRoutes.SmartEdit -> VelaRoutes.AiSchedule
         else -> null
     }
@@ -134,6 +135,7 @@ fun VelaNavHost() {
                         eventId = null,
                         onImportChatClick = { navController.navigate(VelaRoutes.AiSchedule) },
                         onCalendarClick = { navController.navigate(VelaRoutes.Calendar) },
+                        onTimetableClick = { navController.navigate(VelaRoutes.Timetable) },
                         onEventClick = { eventId -> navController.navigate(VelaRoutes.event(eventId)) },
                     )
                 }
@@ -143,6 +145,7 @@ fun VelaNavHost() {
                         eventId = null,
                         onImportChatClick = { navController.navigate(VelaRoutes.AiSchedule) },
                         onCalendarClick = { navController.navigate(VelaRoutes.Calendar) },
+                        onTimetableClick = { navController.navigate(VelaRoutes.Timetable) },
                         onEventClick = { eventId -> navController.navigate(VelaRoutes.event(eventId)) },
                     )
                 }
@@ -176,6 +179,15 @@ fun VelaNavHost() {
                 }
 
                 composable(
+                    route = VelaRoutes.Timetable,
+                    deepLinks = listOf(navDeepLink { uriPattern = "vela://timetable" }),
+                ) {
+                    TimetableScreen(
+                        onEventClick = { eventId -> navController.navigate(VelaRoutes.event(eventId)) },
+                    )
+                }
+
+                composable(
                     route = VelaRoutes.Event,
                     arguments = listOf(navArgument("eventId") { type = NavType.StringType }),
                     deepLinks = listOf(navDeepLink { uriPattern = "vela://event/{eventId}" }),
@@ -184,6 +196,7 @@ fun VelaNavHost() {
                         eventId = eventBackStackEntry.arguments?.getString("eventId"),
                         onImportChatClick = { navController.navigate(VelaRoutes.AiSchedule) },
                         onCalendarClick = { navController.navigate(VelaRoutes.Calendar) },
+                        onTimetableClick = { navController.navigate(VelaRoutes.Timetable) },
                         onEventClick = { eventId -> navController.navigate(VelaRoutes.event(eventId)) },
                     )
                 }

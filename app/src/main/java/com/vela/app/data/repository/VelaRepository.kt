@@ -7,6 +7,7 @@ import com.vela.app.data.model.Event
 import com.vela.app.data.model.EventAdvice
 import com.vela.app.data.model.EventCandidate
 import com.vela.app.data.model.ImportSession
+import com.vela.app.data.model.ImportTarget
 import com.vela.app.data.model.UserPreferences
 import com.vela.app.data.model.WidgetSnapshot
 import kotlinx.coroutines.flow.StateFlow
@@ -29,6 +30,14 @@ interface VelaRepository {
     fun rejectCandidate(candidateId: String)
     fun importCandidate(candidateId: String): ImportResult
     fun importSelectedCandidates(): ImportResult
+    fun submitFloatingImportImage(
+        attachment: AiInputAttachment,
+        target: ImportTarget,
+    ): FloatingImportSubmissionResult
+    fun importFloatingCandidates(
+        candidates: List<EventCandidate>,
+        target: ImportTarget,
+    ): ImportResult
     fun addEvent(event: Event)
     fun updateEvent(event: Event)
     fun deleteEvent(eventId: String)
@@ -57,3 +66,9 @@ data class ImportResult(
 ) {
     val isSuccess: Boolean = importedCount > 0 && blockedReasons.isEmpty()
 }
+
+data class FloatingImportSubmissionResult(
+    val isSuccess: Boolean,
+    val message: String,
+    val candidates: List<EventCandidate> = emptyList(),
+)

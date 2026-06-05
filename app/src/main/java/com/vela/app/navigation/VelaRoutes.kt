@@ -6,6 +6,7 @@ object VelaRoutes {
     const val Activity = "activity/{date}"
     const val AiSchedule = "ai/schedule"
     const val ImportChat = AiSchedule
+    const val Timetable = "timetable"
     const val SmartEdit = "smart/edit"
     const val Settings = "settings"
     const val Event = "event/{eventId}"

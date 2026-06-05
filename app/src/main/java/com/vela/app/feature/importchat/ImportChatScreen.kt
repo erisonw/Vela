@@ -6,6 +6,7 @@ import android.content.pm.PackageManager
 import android.media.MediaRecorder
 import android.net.Uri
 import android.provider.OpenableColumns
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -26,8 +27,10 @@ import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
@@ -49,6 +52,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
@@ -84,6 +88,7 @@ import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.yield
 import java.io.ByteArrayOutputStream
 import java.io.File
 import java.time.OffsetDateTime
@@ -95,6 +100,7 @@ data class ImportChatUiState(
     val candidates: List<EventCandidate> = emptyList(),
     val lastImportResult: ImportResult? = null,
     val userPreferences: UserPreferences = UserPreferences(),
+    val isSubmittingText: Boolean = false,
     val isSubmittingAttachment: Boolean = false,
     val attachmentErrorText: String? = null,
     val inputErrorText: String? = null,
@@ -133,6 +139,11 @@ data class ImportChatUiState(
         }
         ?: lastImportResult?.blockedReasons?.firstOrNull()
 
+    val parsingStatusText: String? = when {
+        isSubmittingText || isSubmittingAttachment -> "正在解析中..."
+        else -> null
+    }
+
 }
 
 data class HighlightedImportDate(
@@ -141,6 +152,7 @@ data class HighlightedImportDate(
 )
 
 private data class InputSubmissionState(
+    val isSubmittingText: Boolean = false,
     val isSubmittingAttachment: Boolean = false,
     val attachmentErrorText: String? = null,
     val inputErrorText: String? = null,
@@ -164,6 +176,7 @@ private data class VoiceSubmissionState(
 class ImportChatViewModel : ViewModel() {
     private val repository = MockVelaRepository
     private val _lastImportResult = kotlinx.coroutines.flow.MutableStateFlow<ImportResult?>(null)
+    private val _isSubmittingText = kotlinx.coroutines.flow.MutableStateFlow(false)
     private val _isSubmittingAttachment = kotlinx.coroutines.flow.MutableStateFlow(false)
     private val _attachmentErrorText = kotlinx.coroutines.flow.MutableStateFlow<String?>(null)
     private val _inputErrorText = kotlinx.coroutines.flow.MutableStateFlow<String?>(null)
@@ -196,10 +209,12 @@ class ImportChatViewModel : ViewModel() {
     }
 
     private val inputSubmissionState = combine(
+        _isSubmittingText,
         attachmentSubmissionState,
         voiceSubmissionState,
-    ) { attachmentState, voiceState ->
+    ) { isSubmittingText, attachmentState, voiceState ->
         InputSubmissionState(
+            isSubmittingText = isSubmittingText,
             isSubmittingAttachment = attachmentState.isSubmittingAttachment,
             attachmentErrorText = attachmentState.attachmentErrorText,
             inputErrorText = attachmentState.inputErrorText,
@@ -221,6 +236,7 @@ class ImportChatViewModel : ViewModel() {
             candidates = candidates,
             lastImportResult = lastImportResult,
             userPreferences = userPreferences,
+            isSubmittingText = inputState.isSubmittingText,
             isSubmittingAttachment = inputState.isSubmittingAttachment,
             attachmentErrorText = inputState.attachmentErrorText,
             inputErrorText = inputState.inputErrorText,
@@ -236,11 +252,16 @@ class ImportChatViewModel : ViewModel() {
 
     fun submitText(text: String) {
         viewModelScope.launch(Dispatchers.IO) {
-            val result = repository.submitImportText(text)
-            _lastImportResult.value = null
-            _attachmentErrorText.value = null
-            _inputErrorText.value = result.compactFailureMessage()
-            _voiceErrorText.value = null
+            _isSubmittingText.value = true
+            try {
+                val result = repository.submitImportText(text)
+                _lastImportResult.value = null
+                _attachmentErrorText.value = null
+                _inputErrorText.value = result.compactFailureMessage()
+                _voiceErrorText.value = null
+            } finally {
+                _isSubmittingText.value = false
+            }
         }
     }
 
@@ -250,11 +271,16 @@ class ImportChatViewModel : ViewModel() {
 
     fun submitEditInstruction(instruction: String) {
         viewModelScope.launch(Dispatchers.IO) {
-            val result = repository.submitNaturalLanguageEdit(instruction)
-            _lastImportResult.value = null
-            _attachmentErrorText.value = null
-            _inputErrorText.value = result.compactFailureMessage()
-            _voiceErrorText.value = null
+            _isSubmittingText.value = true
+            try {
+                val result = repository.submitNaturalLanguageEdit(instruction)
+                _lastImportResult.value = null
+                _attachmentErrorText.value = null
+                _inputErrorText.value = result.compactFailureMessage()
+                _voiceErrorText.value = null
+            } finally {
+                _isSubmittingText.value = false
+            }
         }
     }
 
@@ -375,6 +401,7 @@ fun ImportChatScreen(
     var isVoiceRecording by remember { mutableStateOf(false) }
     var voiceRecorder by remember { mutableStateOf<MediaRecorder?>(null) }
     var voiceRecordingFile by remember { mutableStateOf<File?>(null) }
+    val listState = rememberLazyListState()
     val notificationPermissionLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestPermission(),
     ) { granted ->
@@ -397,6 +424,21 @@ fun ImportChatScreen(
             voiceStatusText = null
             isVoiceStatusError = false
             viewModel.clearVoiceTranscript()
+        }
+    }
+    LaunchedEffect(
+        uiState.session?.messages?.size,
+        uiState.visibleCandidates.size,
+        uiState.isSubmittingText,
+        uiState.isSubmittingAttachment,
+        uiState.inputErrorText,
+        uiState.attachmentErrorText,
+        uiState.voiceErrorText,
+    ) {
+        yield()
+        val lastItemIndex = listState.layoutInfo.totalItemsCount - 1
+        if (lastItemIndex >= 0) {
+            listState.animateScrollToItem(lastItemIndex)
         }
     }
 
@@ -517,6 +559,7 @@ fun ImportChatScreen(
     ) {
         LazyColumn(
             modifier = Modifier.fillMaxSize(),
+            state = listState,
             contentPadding = PaddingValues(start = 16.dp, top = 6.dp, end = 16.dp, bottom = 120.dp),
             verticalArrangement = Arrangement.spacedBy(10.dp),
         ) {
@@ -561,9 +604,9 @@ fun ImportChatScreen(
                     InlineStatusText(text = errorText, isError = true)
                 }
             }
-            if (uiState.isSubmittingAttachment) {
+            uiState.parsingStatusText?.let { parsingStatusText ->
                 item {
-                    InlineStatusText(text = "正在识别...", isError = false)
+                    ParsingStatusBubble(text = parsingStatusText)
                 }
             }
             if (uiState.isTranscribingVoice) {
@@ -682,6 +725,7 @@ private fun ImportInputBar(
         shape = RoundedCornerShape(28.dp),
         tonalElevation = 4.dp,
         shadowElevation = 8.dp,
+        border = BorderStroke(1.dp, ImportInputBorderColor),
         color = ImportInputBarColor,
     ) {
         Row(
@@ -725,8 +769,9 @@ private fun ImportInputBar(
                     onValueChange = onTextChange,
                     singleLine = true,
                     textStyle = MaterialTheme.typography.bodyLarge.copy(
-                        color = MaterialTheme.colorScheme.onSurface,
+                        color = ImportInputTextColor,
                     ),
+                    cursorBrush = SolidColor(ImportAccentColor),
                 )
                 if (text.isBlank()) {
                     Text(
@@ -736,7 +781,7 @@ private fun ImportInputBar(
                             "输入..."
                         },
                         style = MaterialTheme.typography.bodyLarge,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        color = ImportPlaceholderColor,
                     )
                 }
             }
@@ -772,9 +817,10 @@ private fun RoundIconButton(
             .clickable(enabled = enabled, onClick = onClick),
         shape = CircleShape,
         color = when {
-            filled -> Color.Black
+            filled -> ImportPrimaryActionColor
             else -> ImportInputButtonColor
         },
+        border = BorderStroke(1.dp, if (filled) ImportPrimaryActionColor else ImportInputBorderColor),
     ) {
         Box(contentAlignment = Alignment.Center) {
             Icon(
@@ -782,8 +828,8 @@ private fun RoundIconButton(
                 contentDescription = contentDescription,
                 tint = when {
                     filled -> Color.White
-                    enabled -> Color.Black
-                    else -> MaterialTheme.colorScheme.onSurfaceVariant
+                    enabled -> ImportIconColor
+                    else -> ImportDisabledColor
                 },
                 modifier = Modifier.size(22.dp),
             )
@@ -801,11 +847,33 @@ private fun InlineStatusText(
         text = text,
         style = MaterialTheme.typography.bodySmall,
         color = if (isError) {
-            MaterialTheme.colorScheme.error
+            ImportErrorColor
         } else {
-            MaterialTheme.colorScheme.onSurfaceVariant
+            ImportMutedTextColor
         },
     )
+}
+
+@Composable
+private fun ParsingStatusBubble(text: String) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.Start,
+    ) {
+        Surface(
+            modifier = Modifier.fillMaxWidth(0.62f),
+            shape = RoundedCornerShape(22.dp),
+            color = AssistantBubbleColor,
+            border = BorderStroke(1.dp, ImportInputBorderColor),
+        ) {
+            Text(
+                modifier = Modifier.padding(horizontal = 16.dp, vertical = 11.dp),
+                text = text,
+                style = MaterialTheme.typography.bodyMedium,
+                color = ImportSecondaryTextColor,
+            )
+        }
+    }
 }
 
 @Composable
@@ -821,6 +889,7 @@ private fun ImportSuccessBubble(
             modifier = Modifier.fillMaxWidth(0.88f),
             shape = RoundedCornerShape(22.dp),
             color = AssistantBubbleColor,
+            border = BorderStroke(1.dp, ImportInputBorderColor),
         ) {
             Row(
                 modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp),
@@ -831,9 +900,10 @@ private fun ImportSuccessBubble(
                     modifier = Modifier.weight(1f),
                     text = "已导入 $importedCount 条日程",
                     style = MaterialTheme.typography.bodyLarge,
+                    color = ImportPrimaryTextColor,
                 )
                 TextButton(onClick = onScheduleClick) {
-                    Text(text = "查看日程")
+                    Text(text = "查看日程", color = ImportAccentColor)
                 }
             }
         }
@@ -873,6 +943,7 @@ private fun CandidateReviewBubble(
             modifier = Modifier.fillMaxWidth(0.94f),
             shape = RoundedCornerShape(24.dp),
             color = AssistantBubbleColor,
+            border = BorderStroke(1.dp, ImportInputBorderColor),
         ) {
             Column(
                 modifier = Modifier.padding(14.dp),
@@ -882,6 +953,7 @@ private fun CandidateReviewBubble(
                     text = "我整理出 ${candidates.size} 条候选日程",
                     style = MaterialTheme.typography.titleMedium,
                     fontWeight = FontWeight.SemiBold,
+                    color = ImportPrimaryTextColor,
                 )
                 if (dates.isNotEmpty()) {
                     DateChipRow(
@@ -901,7 +973,7 @@ private fun CandidateReviewBubble(
                 }
                 if (hiddenCount > 0) {
                     TextButton(onClick = onToggleExpanded) {
-                        Text(text = "展开全部 $hiddenCount 条")
+                        Text(text = "展开全部 $hiddenCount 条", color = ImportAccentColor)
                     }
                 }
                 CandidateBatchBar(
@@ -950,19 +1022,20 @@ private fun DateFilterChip(
         modifier = Modifier.clickable(onClick = onClick),
         shape = RoundedCornerShape(18.dp),
         color = if (selected) {
-            MaterialTheme.colorScheme.primary
+            ImportPrimaryActionColor
         } else {
-            MaterialTheme.colorScheme.surface
+            ImportChipColor
         },
+        border = BorderStroke(1.dp, if (selected) ImportPrimaryActionColor else ImportInputBorderColor),
     ) {
         Text(
             modifier = Modifier.padding(horizontal = 12.dp, vertical = 7.dp),
             text = label,
             style = MaterialTheme.typography.labelMedium,
             color = if (selected) {
-                MaterialTheme.colorScheme.onPrimary
+                Color.White
             } else {
-                MaterialTheme.colorScheme.onSurfaceVariant
+                ImportSecondaryTextColor
             },
         )
     }
@@ -979,7 +1052,8 @@ private fun CandidateCompactCard(
     Surface(
         modifier = Modifier.fillMaxWidth(),
         shape = RoundedCornerShape(18.dp),
-        color = MaterialTheme.colorScheme.surface,
+        color = ImportCardColor,
+        border = BorderStroke(1.dp, ImportInputBorderColor),
     ) {
         Column(
             modifier = Modifier.padding(12.dp),
@@ -996,17 +1070,18 @@ private fun CandidateCompactCard(
                         .clickable(onClick = onToggle),
                     shape = CircleShape,
                     color = if (candidate.isSelectedForImport) {
-                        MaterialTheme.colorScheme.primary
+                        ImportPrimaryActionColor
                     } else {
-                        MaterialTheme.colorScheme.surfaceVariant
+                        ImportSelectionOffColor
                     },
+                    border = BorderStroke(1.dp, if (candidate.isSelectedForImport) ImportPrimaryActionColor else ImportInputBorderColor),
                 ) {
                     Box(contentAlignment = Alignment.Center) {
                         if (candidate.isSelectedForImport) {
                             Text(
                                 text = "✓",
                                 style = MaterialTheme.typography.labelSmall,
-                                color = MaterialTheme.colorScheme.onPrimary,
+                                color = Color.White,
                             )
                         }
                     }
@@ -1016,32 +1091,33 @@ private fun CandidateCompactCard(
                     text = candidate.title,
                     style = MaterialTheme.typography.titleSmall,
                     fontWeight = FontWeight.SemiBold,
+                    color = ImportPrimaryTextColor,
                 )
                 candidate.confidence?.let { confidence ->
                     Text(
                         text = "${(confidence * 100).toInt()}%",
                         style = MaterialTheme.typography.labelMedium,
-                        color = MaterialTheme.colorScheme.primary,
+                        color = ImportAccentColor,
                     )
                 }
             }
             Text(
                 text = "${candidate.startAt.toDisplayDate()} ${candidate.startAt.toDisplayTime()}",
                 style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                color = ImportSecondaryTextColor,
             )
             candidate.location?.name?.let { locationName ->
                 Text(
                     text = locationName,
                     style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    color = ImportMutedTextColor,
                 )
             }
             if (candidate.missingFields.isNotEmpty()) {
                 Text(
                     text = "待补全：${candidate.missingFields.joinToString("、")}",
                     style = MaterialTheme.typography.labelMedium,
-                    color = MaterialTheme.colorScheme.error,
+                    color = ImportErrorColor,
                 )
             }
             Row(
@@ -1050,13 +1126,13 @@ private fun CandidateCompactCard(
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 TextButton(onClick = onEdit) {
-                    Text(text = "编辑")
+                    Text(text = "编辑", color = ImportAccentColor)
                 }
                 TextButton(onClick = onDelete) {
-                    Text(text = "删除")
+                    Text(text = "删除", color = ImportErrorColor)
                 }
                 TextButton(onClick = onImport) {
-                    Text(text = "导入")
+                    Text(text = "导入", color = ImportAccentColor)
                 }
             }
         }
@@ -1071,7 +1147,8 @@ private fun CandidateBatchBar(
     Surface(
         modifier = Modifier.fillMaxWidth(),
         shape = RoundedCornerShape(18.dp),
-        color = MaterialTheme.colorScheme.surface,
+        color = ImportCardColor,
+        border = BorderStroke(1.dp, ImportInputBorderColor),
     ) {
         Row(
             modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
@@ -1082,11 +1159,17 @@ private fun CandidateBatchBar(
                 modifier = Modifier.weight(1f),
                 text = "已选 $selectedCount 条",
                 style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                color = ImportSecondaryTextColor,
             )
             Button(
                 enabled = selectedCount > 0,
                 onClick = onImportSelected,
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = ImportPrimaryActionColor,
+                    contentColor = Color.White,
+                    disabledContainerColor = ImportDisabledContainerColor,
+                    disabledContentColor = ImportDisabledColor,
+                ),
             ) {
                 Text(text = "导入")
             }
@@ -1094,11 +1177,26 @@ private fun CandidateBatchBar(
     }
 }
 
-private val AssistantBubbleColor = Color(0xFFE9E9EB)
-private val UserBubbleColor = Color.Black
+private val AssistantBubbleColor = Color(0xFFF3F5F8)
+private val UserBubbleColor = Color(0xFF111827)
 private val VelaPageBackground = Color.White
-private val ImportInputBarColor = Color(0xFFF8ECE7)
-private val ImportInputButtonColor = Color(0xFFF2DDD4)
+private val ImportInputBarColor = Color(0xFFFFFFFF)
+private val ImportInputBorderColor = Color(0xFFE2E8F0)
+private val ImportInputButtonColor = Color(0xFFF1F5F9)
+private val ImportInputTextColor = Color(0xFF111827)
+private val ImportPlaceholderColor = Color(0xFF94A3B8)
+private val ImportIconColor = Color(0xFF334155)
+private val ImportPrimaryActionColor = Color(0xFF111827)
+private val ImportAccentColor = Color(0xFF2563EB)
+private val ImportPrimaryTextColor = Color(0xFF111827)
+private val ImportSecondaryTextColor = Color(0xFF475569)
+private val ImportMutedTextColor = Color(0xFF64748B)
+private val ImportErrorColor = Color(0xFFB42318)
+private val ImportChipColor = Color(0xFFF8FAFC)
+private val ImportCardColor = Color(0xFFFFFFFF)
+private val ImportSelectionOffColor = Color(0xFFE2E8F0)
+private val ImportDisabledColor = Color(0xFF94A3B8)
+private val ImportDisabledContainerColor = Color(0xFFE5E7EB)
 
 @Composable
 private fun ChatBubble(message: ChatMessage) {
@@ -1124,12 +1222,13 @@ private fun ChatBubble(message: ChatMessage) {
                 modifier = Modifier.fillMaxWidth(if (isUser) 0.86f else 0.88f),
                 shape = RoundedCornerShape(24.dp),
                 color = if (isUser) UserBubbleColor else AssistantBubbleColor,
+                border = if (isUser) null else BorderStroke(1.dp, ImportInputBorderColor),
             ) {
                 Text(
                     modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp),
                     text = message.content,
                     style = MaterialTheme.typography.bodyLarge,
-                    color = if (isUser) Color.White else MaterialTheme.colorScheme.onSurface,
+                    color = if (isUser) Color.White else ImportPrimaryTextColor,
                 )
             }
         }

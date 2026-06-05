@@ -2,9 +2,13 @@ package com.vela.app.feature.settings
 
 import android.Manifest
 import android.content.Context
+import android.content.Intent
 import android.content.pm.PackageManager
 import android.location.Location
 import android.location.LocationManager
+import android.net.Uri
+import android.os.Build
+import android.provider.Settings as AndroidSettings
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Arrangement
@@ -36,8 +40,10 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
+import com.vela.app.data.ai.AiLocalProxyConfig
 import com.vela.app.data.mock.MockVelaRepository
 import com.vela.app.data.model.UserPreferences
+import com.vela.app.feature.floating.FloatingImportService
 import com.vela.app.ui.ReminderSelector
 import kotlinx.coroutines.flow.StateFlow
 
@@ -73,6 +79,16 @@ class SettingsViewModel : ViewModel() {
         updateAiConfig(voiceModel = model)
     }
 
+    fun applyLocalProxyConfig() {
+        updateAiConfig(
+            endpoint = AiLocalProxyConfig.Endpoint,
+            apiKey = AiLocalProxyConfig.ApiKey,
+            textModel = AiLocalProxyConfig.TextModel,
+            visionModel = AiLocalProxyConfig.VisionModel,
+            voiceModel = AiLocalProxyConfig.VoiceModel,
+        )
+    }
+
     private fun updateAiConfig(
         endpoint: String = preferences.value.aiEndpoint,
         apiKey: String = preferences.value.aiApiKey,
@@ -100,6 +116,7 @@ fun SettingsScreen(
     val preferences by viewModel.preferences.collectAsStateWithLifecycle()
     val context = LocalContext.current
     var locationMessage by remember { mutableStateOf<String?>(null) }
+    var floatingMessage by remember { mutableStateOf<String?>(null) }
     val locationPermissionLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions(),
     ) { permissions ->
@@ -162,6 +179,12 @@ fun SettingsScreen(
                     title = "AI 服务",
                     description = "兼容中转平台的 OpenAI Chat Completions 和 Audio Transcriptions 接口。语音会先转文字，再复用文本解析。",
                 ) {
+                    Button(
+                        modifier = Modifier.fillMaxWidth(),
+                        onClick = viewModel::applyLocalProxyConfig,
+                    ) {
+                        Text(text = "使用本机代理测试配置")
+                    }
                     OutlinedTextField(
                         modifier = Modifier.fillMaxWidth(),
                         value = preferences.aiEndpoint,
@@ -238,6 +261,47 @@ fun SettingsScreen(
 
             item {
                 SettingsSection(
+                    title = "悬浮窗导入",
+                    description = "通过悬浮窗发起截图识别，候选日程确认后才会写入。",
+                ) {
+                    if (AndroidSettings.canDrawOverlays(context)) {
+                        Button(
+                            modifier = Modifier.fillMaxWidth(),
+                            onClick = {
+                                context.startFloatingImportService()
+                                floatingMessage = "悬浮窗已启动。"
+                            },
+                        ) {
+                            Text(text = "启动悬浮窗")
+                        }
+                    } else {
+                        Button(
+                            modifier = Modifier.fillMaxWidth(),
+                            onClick = {
+                                context.openOverlayPermissionSettings()
+                                floatingMessage = "开启权限后返回设置页启动悬浮窗。"
+                            },
+                        ) {
+                            Text(text = "开启悬浮窗权限")
+                        }
+                    }
+                    Button(
+                        modifier = Modifier.fillMaxWidth(),
+                        enabled = false,
+                        onClick = {},
+                    ) {
+                        Text(text = "识别屏幕（实验，暂未开放）")
+                    }
+                    Text(
+                        text = floatingMessage ?: "当前仅支持截图识别，不读取屏幕文本。",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            }
+
+            item {
+                SettingsSection(
                     title = "隐私说明",
                     description = "当前日程保存在本机；AI 和天气未接入时，不会上传你的文本、图片或位置。",
                 ) {
@@ -288,6 +352,23 @@ private fun Context.findLastKnownLocation(): Location? {
     ).mapNotNull { provider ->
         runCatching { locationManager.getLastKnownLocation(provider) }.getOrNull()
     }.maxByOrNull { it.time }
+}
+
+private fun Context.openOverlayPermissionSettings() {
+    val intent = Intent(
+        AndroidSettings.ACTION_MANAGE_OVERLAY_PERMISSION,
+        Uri.parse("package:$packageName"),
+    )
+    startActivity(intent)
+}
+
+private fun Context.startFloatingImportService() {
+    val intent = Intent(this, FloatingImportService::class.java)
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+        startForegroundService(intent)
+    } else {
+        startService(intent)
+    }
 }
 
 private fun UserPreferences.weatherCoordinateText(): String {
