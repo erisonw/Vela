@@ -63,7 +63,11 @@ object EventNotificationScheduler {
     }
 
     fun scheduleEvent(context: Context, event: Event) {
-        cancelEvent(context, event.id)
+        cancelEvent(
+            context = context,
+            eventId = event.id,
+            extraReminderMinutes = event.reminders.map { it.minutesBefore },
+        )
         if (event.reminders.isEmpty()) {
             return
         }
@@ -73,9 +77,17 @@ object EventNotificationScheduler {
         }
     }
 
-    fun cancelEvent(context: Context, eventId: String) {
+    /**
+     * 取消该日程的全部提醒闹钟。除预设分钟数外，调用方应通过 [extraReminderMinutes]
+     * 传入日程上实际存在的提醒分钟数，避免非预设值（如 AI 返回的自定义提前量）的闹钟残留。
+     */
+    fun cancelEvent(
+        context: Context,
+        eventId: String,
+        extraReminderMinutes: Collection<Int> = emptyList(),
+    ) {
         val alarmManager = context.getSystemService(AlarmManager::class.java)
-        ReminderPresetMinutes.filterNotNull().forEach { minutesBefore ->
+        (ReminderPresetMinutes.filterNotNull() + extraReminderMinutes).distinct().forEach { minutesBefore ->
             val pendingIntent = reminderPendingIntent(
                 context = context,
                 eventId = eventId,

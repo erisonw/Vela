@@ -18,8 +18,9 @@ import android.os.IBinder
 import android.os.Looper
 import android.util.Base64
 import com.vela.app.data.ai.AiInputAttachment
-import com.vela.app.data.mock.MockVelaRepository
 import com.vela.app.data.model.ImportTarget
+import com.vela.app.data.repository.VelaRepository
+import com.vela.app.di.VelaGraph
 import java.io.ByteArrayOutputStream
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlinx.coroutines.CoroutineScope
@@ -31,7 +32,7 @@ import kotlinx.coroutines.withContext
 
 class ScreenCaptureService : Service() {
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
-    private val repository = MockVelaRepository
+    private val repository: VelaRepository = VelaGraph.repository
     private val hasCompleted = AtomicBoolean(false)
     private var handlerThread: HandlerThread? = null
     private var handler: Handler? = null
@@ -41,7 +42,6 @@ class ScreenCaptureService : Service() {
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         startCaptureForeground()
-        repository.initialize(this)
         val resultCode = intent?.getIntExtra(ExtraResultCode, 0) ?: 0
         val data = intent?.getParcelableIntentExtra(ExtraData)
         val target = intent?.getImportTargetExtra() ?: ImportTarget.Schedule

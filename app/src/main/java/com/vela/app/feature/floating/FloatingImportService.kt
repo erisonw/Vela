@@ -32,12 +32,13 @@ import android.widget.ScrollView
 import android.widget.Space
 import android.widget.TextView
 import android.widget.Toast
-import com.vela.app.data.mock.MockVelaRepository
 import com.vela.app.data.model.Event
 import com.vela.app.data.model.EventCandidate
 import com.vela.app.data.model.ImportTarget
+import com.vela.app.data.repository.VelaRepository
+import com.vela.app.data.time.VelaClock
+import com.vela.app.di.VelaGraph
 import java.time.OffsetDateTime
-import java.time.ZoneId
 import java.time.format.DateTimeFormatter
 import kotlin.math.abs
 import kotlinx.coroutines.CoroutineScope
@@ -48,7 +49,7 @@ import kotlinx.coroutines.launch
 
 class FloatingImportService : Service() {
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
-    private val repository = MockVelaRepository
+    private val repository: VelaRepository = VelaGraph.repository
     private val mainHandler = Handler(Looper.getMainLooper())
     private lateinit var windowManager: WindowManager
     private var floatingView: View? = null
@@ -60,7 +61,6 @@ class FloatingImportService : Service() {
 
     override fun onCreate() {
         super.onCreate()
-        repository.initialize(this)
         windowManager = getSystemService(WindowManager::class.java)
         collapsedY = 220.dp
         FloatingImportNotifications.ensureChannel(this)
@@ -489,7 +489,7 @@ class FloatingImportService : Service() {
     }
 
     private fun showTodayEvents() {
-        val today = java.time.LocalDate.now(ZoneId.of("Asia/Shanghai"))
+        val today = VelaClock.today()
         val events = repository.events.value.filter { event ->
             event.startAt.toOffsetDateTimeOrNull()?.toLocalDate() == today
         }

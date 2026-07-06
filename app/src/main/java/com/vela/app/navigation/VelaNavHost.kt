@@ -35,7 +35,7 @@ fun VelaNavHost() {
     val currentRoute = currentDestination?.route
     val topLevelRoute = when (currentRoute) {
         VelaRoutes.Calendar, VelaRoutes.Activity -> VelaRoutes.Calendar
-        VelaRoutes.Schedule, VelaRoutes.Event, VelaRoutes.Timetable, "home" -> VelaRoutes.Schedule
+        VelaRoutes.Schedule, VelaRoutes.Event, VelaRoutes.Timetable -> VelaRoutes.Schedule
         VelaRoutes.AiSchedule, VelaRoutes.SmartEdit -> VelaRoutes.AiSchedule
         else -> null
     }
@@ -94,6 +94,25 @@ fun VelaNavHost() {
             }
         },
     ) { innerPadding ->
+        val homeScreenFor: @Composable (String?) -> Unit = { eventId ->
+            HomeScreen(
+                eventId = eventId,
+                onImportChatClick = { navController.navigate(VelaRoutes.AiSchedule) },
+                onCalendarClick = { navController.navigate(VelaRoutes.Calendar) },
+                onTimetableClick = { navController.navigate(VelaRoutes.Timetable) },
+                onEventClick = { clickedEventId ->
+                    navController.navigate(VelaRoutes.event(clickedEventId))
+                },
+            )
+        }
+        val importChatScreen: @Composable () -> Unit = {
+            ImportChatScreen(
+                onCalendarClick = { navController.navigate(VelaRoutes.Calendar) },
+                onScheduleClick = { navController.navigate(VelaRoutes.Schedule) },
+                onSettingsClick = { navController.navigate(VelaRoutes.Settings) },
+            )
+        }
+
         Box(
             modifier = Modifier
                 .padding(innerPadding)
@@ -131,23 +150,7 @@ fun VelaNavHost() {
                         navDeepLink { uriPattern = "vela://schedule" },
                     ),
                 ) {
-                    HomeScreen(
-                        eventId = null,
-                        onImportChatClick = { navController.navigate(VelaRoutes.AiSchedule) },
-                        onCalendarClick = { navController.navigate(VelaRoutes.Calendar) },
-                        onTimetableClick = { navController.navigate(VelaRoutes.Timetable) },
-                        onEventClick = { eventId -> navController.navigate(VelaRoutes.event(eventId)) },
-                    )
-                }
-
-                composable(route = "home") {
-                    HomeScreen(
-                        eventId = null,
-                        onImportChatClick = { navController.navigate(VelaRoutes.AiSchedule) },
-                        onCalendarClick = { navController.navigate(VelaRoutes.Calendar) },
-                        onTimetableClick = { navController.navigate(VelaRoutes.Timetable) },
-                        onEventClick = { eventId -> navController.navigate(VelaRoutes.event(eventId)) },
-                    )
+                    homeScreenFor(null)
                 }
 
                 composable(
@@ -156,22 +159,14 @@ fun VelaNavHost() {
                         navDeepLink { uriPattern = "vela://import/chat" },
                     ),
                 ) {
-                    ImportChatScreen(
-                        onCalendarClick = { navController.navigate(VelaRoutes.Calendar) },
-                        onScheduleClick = { navController.navigate(VelaRoutes.Schedule) },
-                        onSettingsClick = { navController.navigate(VelaRoutes.Settings) },
-                    )
+                    importChatScreen()
                 }
 
                 composable(
                     route = VelaRoutes.SmartEdit,
                     deepLinks = listOf(navDeepLink { uriPattern = "vela://smart/edit" }),
                 ) {
-                    ImportChatScreen(
-                        onCalendarClick = { navController.navigate(VelaRoutes.Calendar) },
-                        onScheduleClick = { navController.navigate(VelaRoutes.Schedule) },
-                        onSettingsClick = { navController.navigate(VelaRoutes.Settings) },
-                    )
+                    importChatScreen()
                 }
 
                 composable(route = VelaRoutes.Settings) {
@@ -192,13 +187,7 @@ fun VelaNavHost() {
                     arguments = listOf(navArgument("eventId") { type = NavType.StringType }),
                     deepLinks = listOf(navDeepLink { uriPattern = "vela://event/{eventId}" }),
                 ) { eventBackStackEntry ->
-                    HomeScreen(
-                        eventId = eventBackStackEntry.arguments?.getString("eventId"),
-                        onImportChatClick = { navController.navigate(VelaRoutes.AiSchedule) },
-                        onCalendarClick = { navController.navigate(VelaRoutes.Calendar) },
-                        onTimetableClick = { navController.navigate(VelaRoutes.Timetable) },
-                        onEventClick = { eventId -> navController.navigate(VelaRoutes.event(eventId)) },
-                    )
+                    homeScreenFor(eventBackStackEntry.arguments?.getString("eventId"))
                 }
 
             }

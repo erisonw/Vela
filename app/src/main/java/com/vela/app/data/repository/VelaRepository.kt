@@ -20,17 +20,17 @@ interface VelaRepository {
     val widgetSnapshot: StateFlow<WidgetSnapshot>
     val userPreferences: StateFlow<UserPreferences>
 
-    fun submitImportText(text: String): ImportSubmissionResult
-    fun submitImportImage(attachment: AiInputAttachment): ImportSubmissionResult
-    fun transcribeVoice(recording: AiVoiceRecording): VoiceTranscriptionResult
-    fun submitNaturalLanguageEdit(instruction: String): ImportSubmissionResult
+    suspend fun submitImportText(text: String): ImportSubmissionResult
+    suspend fun submitImportImage(attachment: AiInputAttachment): ImportSubmissionResult
+    suspend fun transcribeVoice(recording: AiVoiceRecording): VoiceTranscriptionResult
+    suspend fun submitNaturalLanguageEdit(instruction: String): ImportSubmissionResult
     fun addManualCandidate(candidate: EventCandidate)
     fun toggleCandidateSelection(candidateId: String)
     fun updateCandidate(candidate: EventCandidate)
     fun rejectCandidate(candidateId: String)
     fun importCandidate(candidateId: String): ImportResult
     fun importSelectedCandidates(): ImportResult
-    fun submitFloatingImportImage(
+    suspend fun submitFloatingImportImage(
         attachment: AiInputAttachment,
         target: ImportTarget,
     ): FloatingImportSubmissionResult
@@ -41,8 +41,9 @@ interface VelaRepository {
     fun addEvent(event: Event)
     fun updateEvent(event: Event)
     fun deleteEvent(eventId: String)
-    fun prepareEventAdvice(eventId: String): EventAdvice?
+    suspend fun prepareEventAdvice(eventId: String): EventAdvice?
     fun eventAdviceFor(eventId: String): EventAdvice?
+    suspend fun rescheduleReminders()
     fun updateDefaultReminderMinutes(minutesBefore: Int?)
     fun updateWeatherLocation(latitude: Double, longitude: Double)
     fun updateAiServiceConfig(

@@ -18,10 +18,9 @@ import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
 import kotlinx.serialization.json.Json
-import java.io.OutputStreamWriter
-import java.net.HttpURLConnection
-import java.net.URL
-import kotlin.concurrent.thread
+import java.util.UUID
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 
 const val EventCandidatesExtractPath = "/v1/event-candidates:extract"
 
@@ -63,7 +62,7 @@ sealed interface AiExtractionResult {
 }
 
 interface AiExtractionClient {
-    fun extract(request: AiExtractionRequest): AiExtractionResult
+    suspend fun extract(request: AiExtractionRequest): AiExtractionResult
 }
 
 class HttpAiExtractionClient(
@@ -77,7 +76,7 @@ class HttpAiExtractionClient(
         ignoreUnknownKeys = true
     }
 
-    override fun extract(request: AiExtractionRequest): AiExtractionResult {
+    override suspend fun extract(request: AiExtractionRequest): AiExtractionResult {
         val serviceUrl = endpoint.toServiceUrl()
         if (serviceUrl.isBlank()) {
             return missingConfigFailure()
@@ -91,22 +90,13 @@ class HttpAiExtractionClient(
             return attachmentFailure
         }
 
-        var result: AiExtractionResult? = null
-        var error: Throwable? = null
-        val worker = thread(name = "vela-ai-extract") {
+        return withContext(Dispatchers.IO) {
             runCatching {
                 executeRequest(serviceUrl, request)
-            }.onSuccess {
-                result = it
-            }.onFailure {
-                error = it
+            }.getOrElse {
+                networkFailure()
             }
         }
-        worker.join()
-        error?.let {
-            return networkFailure()
-        }
-        return result ?: networkFailure()
     }
 
     private fun executeRequest(
@@ -124,39 +114,24 @@ class HttpAiExtractionClient(
         request: AiExtractionRequest,
     ): AiExtractionResult =
         runCatching {
-            val connection = (URL(serviceUrl).openConnection() as HttpURLConnection).apply {
-                requestMethod = "POST"
-                connectTimeout = 15_000
-                readTimeout = 30_000
-                doOutput = true
-                setRequestProperty("Content-Type", "application/json; charset=utf-8")
-                if (apiKey.isNotBlank()) {
-                    setRequestProperty("Authorization", "Bearer $apiKey")
-                }
-            }
-            OutputStreamWriter(connection.outputStream, Charsets.UTF_8).use { writer ->
-                writer.write(json.encodeToString(request))
-            }
+            val response = HttpJsonTransport.postJson(
+                url = serviceUrl,
+                apiKey = apiKey,
+                body = json.encodeToString(request),
+                readTimeoutMillis = 30_000,
+            )
 
-            val responseCode = connection.responseCode
-            val responseText = if (responseCode in 200..299) {
-                connection.inputStream.bufferedReader().use { it.readText() }
-            } else {
-                connection.errorStream?.bufferedReader()?.use { it.readText() }.orEmpty()
-            }
-            connection.disconnect()
-
-            if (responseCode !in 200..299) {
+            if (!response.isSuccess) {
                 AiExtractionResult.Failure(
-                    code = "HTTP_$responseCode",
-                    message = "连接失败请重试。AI 服务返回 $responseCode，未生成候选日程。",
+                    code = "HTTP_${response.code}",
+                    message = "连接失败请重试。AI 服务返回 ${response.code}，未生成候选日程。",
                     retryable = true,
                 )
             } else {
-                val response = json.decodeFromString<AiExtractionResponse>(responseText)
+                val extraction = json.decodeFromString<AiExtractionResponse>(response.body)
                 AiExtractionResult.Success(
-                    summary = response.summary.ifBlank { "已解析出 ${response.candidates.size} 条候选日程。" },
-                    candidates = response.candidates,
+                    summary = extraction.summary.ifBlank { "已解析出 ${extraction.candidates.size} 条候选日程。" },
+                    candidates = extraction.candidates,
                 )
             }
         }.getOrElse {
@@ -191,36 +166,21 @@ class HttpAiExtractionClient(
         includeResponseFormat: Boolean,
     ): AiExtractionResult =
         runCatching {
-            val connection = (URL(serviceUrl).openConnection() as HttpURLConnection).apply {
-                requestMethod = "POST"
-                connectTimeout = 15_000
-                readTimeout = 90_000
-                doOutput = true
-                setRequestProperty("Content-Type", "application/json; charset=utf-8")
-                if (apiKey.isNotBlank()) {
-                    setRequestProperty("Authorization", "Bearer $apiKey")
-                }
-            }
-            OutputStreamWriter(connection.outputStream, Charsets.UTF_8).use { writer ->
-                writer.write(json.encodeToString(openAiCompatiblePayload(request, includeResponseFormat)))
-            }
+            val response = HttpJsonTransport.postJson(
+                url = serviceUrl,
+                apiKey = apiKey,
+                body = json.encodeToString(openAiCompatiblePayload(request, includeResponseFormat)),
+                readTimeoutMillis = 90_000,
+            )
 
-            val responseCode = connection.responseCode
-            val responseText = if (responseCode in 200..299) {
-                connection.inputStream.bufferedReader().use { it.readText() }
-            } else {
-                connection.errorStream?.bufferedReader()?.use { it.readText() }.orEmpty()
-            }
-            connection.disconnect()
-
-            if (responseCode !in 200..299) {
+            if (!response.isSuccess) {
                 AiExtractionResult.Failure(
-                    code = "HTTP_$responseCode",
-                    message = "连接失败请重试。AI 服务返回 $responseCode，未生成候选日程。",
+                    code = "HTTP_${response.code}",
+                    message = "连接失败请重试。AI 服务返回 ${response.code}，未生成候选日程。",
                     retryable = true,
                 )
             } else {
-                parseOpenAiCompatibleResponse(responseText)
+                parseOpenAiCompatibleResponse(response.body)
             }
         }.getOrElse {
             networkFailure()
@@ -305,8 +265,8 @@ class HttpAiExtractionClient(
     private fun missingConfigFailure(): AiExtractionResult.Failure =
         AiExtractionResult.Failure(
             code = "SERVICE_NOT_CONFIGURED",
-            message = "连接失败请重试。当前未配置真实 AI 服务，可以到「日程」里本地新建。",
-            retryable = true,
+            message = "尚未配置 AI 服务，请到「设置」填写服务地址和模型，或到「日程」里本地新建。",
+            retryable = false,
         )
 
     private fun missingModelFailure(type: AiInputType): AiExtractionResult.Failure =
@@ -518,7 +478,7 @@ private data class OpenAiCandidate(
             return null
         }
         return EventCandidate(
-            id = "candidate-ai-${System.currentTimeMillis()}-$index",
+            id = "candidate-ai-${UUID.randomUUID()}-$index",
             title = cleanTitle,
             startAt = cleanStartAt,
             endAt = endAt?.trim()?.takeIf { it.isNotBlank() },
@@ -549,13 +509,13 @@ private data class OpenAiLocation(
 }
 
 object UnavailableAiExtractionClient : AiExtractionClient {
-    override fun extract(request: AiExtractionRequest): AiExtractionResult =
+    override suspend fun extract(request: AiExtractionRequest): AiExtractionResult =
         AiExtractionResult.Failure(
             code = "SERVICE_UNAVAILABLE",
             message = when (request.type) {
-                AiInputType.Text -> "连接失败请重试。当前未生成候选日程，可以到「日程」里本地新建。"
-                AiInputType.Image -> "图片识别服务暂不可用，请稍后重试，或到「日程」里本地新建。"
+                AiInputType.Text -> "尚未配置 AI 服务，请到「设置」填写服务地址和模型，或到「日程」里本地新建。"
+                AiInputType.Image -> "尚未配置 AI 服务，图片识别不可用，请到「设置」填写服务地址和模型。"
             },
-            retryable = true,
+            retryable = false,
         )
 }

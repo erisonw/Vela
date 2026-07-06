@@ -38,7 +38,9 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewModelScope
 import androidx.lifecycle.viewmodel.compose.viewModel
-import com.vela.app.data.mock.MockVelaRepository
+import com.vela.app.data.repository.VelaRepository
+import com.vela.app.data.time.VelaClock
+import com.vela.app.di.VelaGraph
 import com.vela.app.data.model.Event
 import com.vela.app.data.model.EventAdvice
 import com.vela.app.data.model.EventAdviceStatus
@@ -49,7 +51,6 @@ import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.stateIn
 import java.time.LocalDate
 import java.time.OffsetDateTime
-import java.time.ZoneId
 import java.time.format.DateTimeFormatter
 import java.util.Locale
 
@@ -58,8 +59,9 @@ data class ActivityUiState(
     val eventAdvices: Map<String, EventAdvice> = emptyMap(),
 )
 
-class ActivityViewModel : ViewModel() {
-    private val repository = MockVelaRepository
+class ActivityViewModel(
+    private val repository: VelaRepository = VelaGraph.repository,
+) : ViewModel() {
 
     val uiState: StateFlow<ActivityUiState> = combine(
         repository.events,
@@ -85,7 +87,7 @@ fun ActivityScreen(
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
     val date = remember(dateText) {
         runCatching { LocalDate.parse(dateText) }
-            .getOrDefault(LocalDate.now(ZoneId.of("Asia/Shanghai")))
+            .getOrDefault(VelaClock.today())
     }
     var selectedFilter by remember(dateText) { mutableStateOf(ActivityFilter.All) }
     val dayEvents = remember(uiState.events, date) {
@@ -187,7 +189,7 @@ private fun ActivityEventRow(
     advice: EventAdvice?,
     onClick: () -> Unit,
 ) {
-    val isPast = event.hasEndedAt(OffsetDateTime.now(ZoneId.of("Asia/Shanghai")))
+    val isPast = event.hasEndedAt(VelaClock.now())
     Row(
         modifier = Modifier
             .fillMaxWidth()
@@ -334,7 +336,7 @@ private fun List<Event>.filterBy(
     filter: ActivityFilter,
     advices: Map<String, EventAdvice>,
 ): List<Event> {
-    val now = OffsetDateTime.now(ZoneId.of("Asia/Shanghai"))
+    val now = VelaClock.now()
     return when (filter) {
         ActivityFilter.All -> this
         ActivityFilter.Upcoming -> filterNot { it.hasEndedAt(now) }

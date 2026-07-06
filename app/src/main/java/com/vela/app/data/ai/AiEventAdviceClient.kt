@@ -11,9 +11,8 @@ import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
-import java.io.OutputStreamWriter
-import java.net.HttpURLConnection
-import java.net.URL
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 
 data class AiEventAdviceRequest(
     val event: Event,
@@ -33,7 +32,7 @@ sealed interface AiEventAdviceResult {
 }
 
 interface AiEventAdviceClient {
-    fun generate(request: AiEventAdviceRequest): AiEventAdviceResult
+    suspend fun generate(request: AiEventAdviceRequest): AiEventAdviceResult
 }
 
 class HttpAiEventAdviceClient(
@@ -45,24 +44,26 @@ class HttpAiEventAdviceClient(
         ignoreUnknownKeys = true
     }
 
-    override fun generate(request: AiEventAdviceRequest): AiEventAdviceResult {
+    override suspend fun generate(request: AiEventAdviceRequest): AiEventAdviceResult {
         val serviceUrl = endpoint.toChatCompletionsUrl()
         val cleanModel = model.trim()
         if (serviceUrl.isBlank() || cleanModel.isBlank()) {
             return AiEventAdviceResult.Failure(
                 code = "SERVICE_NOT_CONFIGURED",
                 message = "AI 建议服务未配置。",
-                retryable = true,
+                retryable = false,
             )
         }
-        return runCatching {
-            executeRequest(serviceUrl, cleanModel, request)
-        }.getOrElse {
-            AiEventAdviceResult.Failure(
-                code = "NETWORK_ERROR",
-                message = "AI 建议生成失败。",
-                retryable = true,
-            )
+        return withContext(Dispatchers.IO) {
+            runCatching {
+                executeRequest(serviceUrl, cleanModel, request)
+            }.getOrElse {
+                AiEventAdviceResult.Failure(
+                    code = "NETWORK_ERROR",
+                    message = "AI 建议生成失败。",
+                    retryable = true,
+                )
+            }
         }
     }
 
@@ -71,38 +72,22 @@ class HttpAiEventAdviceClient(
         cleanModel: String,
         request: AiEventAdviceRequest,
     ): AiEventAdviceResult {
-        val connection = (URL(serviceUrl).openConnection() as HttpURLConnection).apply {
-            requestMethod = "POST"
-            connectTimeout = 15_000
-            readTimeout = 60_000
-            doOutput = true
-            setRequestProperty("Content-Type", "application/json; charset=utf-8")
-            if (apiKey.isNotBlank()) {
-                setRequestProperty("Authorization", "Bearer $apiKey")
-            }
-        }
+        val response = HttpJsonTransport.postJson(
+            url = serviceUrl,
+            apiKey = apiKey,
+            body = openAiAdvicePayload(cleanModel, request).toString(),
+            readTimeoutMillis = 60_000,
+        )
 
-        OutputStreamWriter(connection.outputStream, Charsets.UTF_8).use { writer ->
-            writer.write(openAiAdvicePayload(cleanModel, request).toString())
-        }
-
-        val responseCode = connection.responseCode
-        val responseText = if (responseCode in 200..299) {
-            connection.inputStream.bufferedReader().use { it.readText() }
-        } else {
-            connection.errorStream?.bufferedReader()?.use { it.readText() }.orEmpty()
-        }
-        connection.disconnect()
-
-        if (responseCode !in 200..299) {
+        if (!response.isSuccess) {
             return AiEventAdviceResult.Failure(
-                code = "HTTP_$responseCode",
-                message = "AI 建议服务返回 $responseCode。",
+                code = "HTTP_${response.code}",
+                message = "AI 建议服务返回 ${response.code}。",
                 retryable = true,
             )
         }
 
-        val content = json.parseToJsonElement(responseText)
+        val content = json.parseToJsonElement(response.body)
             .jsonObject["choices"]
             ?.jsonArray
             ?.firstOrNull()
@@ -177,11 +162,11 @@ class HttpAiEventAdviceClient(
 }
 
 object UnavailableAiEventAdviceClient : AiEventAdviceClient {
-    override fun generate(request: AiEventAdviceRequest): AiEventAdviceResult =
+    override suspend fun generate(request: AiEventAdviceRequest): AiEventAdviceResult =
         AiEventAdviceResult.Failure(
             code = "SERVICE_UNAVAILABLE",
             message = "AI 建议服务未配置。",
-            retryable = true,
+            retryable = false,
         )
 }
 

@@ -67,7 +67,8 @@ import com.vela.app.data.ai.AiVoiceRecording
 import com.vela.app.data.ai.VoiceTranscriptionResult
 import com.vela.app.data.model.ChatMessage
 import com.vela.app.data.model.ChatMessageRole
-import com.vela.app.data.mock.MockVelaRepository
+import com.vela.app.data.repository.VelaRepository
+import com.vela.app.di.VelaGraph
 import com.vela.app.data.model.EventCandidate
 import com.vela.app.data.model.EventCandidateReviewStatus
 import com.vela.app.data.model.ImportSession
@@ -173,8 +174,9 @@ private data class VoiceSubmissionState(
     val voiceTranscriptText: String? = null,
 )
 
-class ImportChatViewModel : ViewModel() {
-    private val repository = MockVelaRepository
+class ImportChatViewModel(
+    private val repository: VelaRepository = VelaGraph.repository,
+) : ViewModel() {
     private val _lastImportResult = kotlinx.coroutines.flow.MutableStateFlow<ImportResult?>(null)
     private val _isSubmittingText = kotlinx.coroutines.flow.MutableStateFlow(false)
     private val _isSubmittingAttachment = kotlinx.coroutines.flow.MutableStateFlow(false)

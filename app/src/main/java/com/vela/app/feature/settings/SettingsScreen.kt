@@ -41,14 +41,16 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.vela.app.data.ai.AiLocalProxyConfig
-import com.vela.app.data.mock.MockVelaRepository
 import com.vela.app.data.model.UserPreferences
+import com.vela.app.data.repository.VelaRepository
+import com.vela.app.di.VelaGraph
 import com.vela.app.feature.floating.FloatingImportService
 import com.vela.app.ui.ReminderSelector
 import kotlinx.coroutines.flow.StateFlow
 
-class SettingsViewModel : ViewModel() {
-    private val repository = MockVelaRepository
+class SettingsViewModel(
+    private val repository: VelaRepository = VelaGraph.repository,
+) : ViewModel() {
     val preferences: StateFlow<UserPreferences> = repository.userPreferences
 
     fun updateDefaultReminder(minutesBefore: Int?) {
