@@ -18,10 +18,9 @@ import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
 import kotlinx.serialization.json.Json
-import java.io.OutputStreamWriter
-import java.net.HttpURLConnection
-import java.net.URL
-import kotlin.concurrent.thread
+import java.util.UUID
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 
 const val EventCandidatesExtractPath = "/v1/event-candidates:extract"
 
@@ -63,7 +62,7 @@ sealed interface AiExtractionResult {
 }
 
 interface AiExtractionClient {
-    fun extract(request: AiExtractionRequest): AiExtractionResult
+    suspend fun extract(request: AiExtractionRequest): AiExtractionResult
 }
 
 class HttpAiExtractionClient(
@@ -77,7 +76,7 @@ class HttpAiExtractionClient(
         ignoreUnknownKeys = true
     }
 
-    override fun extract(request: AiExtractionRequest): AiExtractionResult {
+    override suspend fun extract(request: AiExtractionRequest): AiExtractionResult {
         val serviceUrl = endpoint.toServiceUrl()
         if (serviceUrl.isBlank()) {
             return missingConfigFailure()
@@ -91,22 +90,13 @@ class HttpAiExtractionClient(
             return attachmentFailure
         }
 
-        var result: AiExtractionResult? = null
-        var error: Throwable? = null
-        val worker = thread(name = "vela-ai-extract") {
+        return withContext(Dispatchers.IO) {
             runCatching {
                 executeRequest(serviceUrl, request)
-            }.onSuccess {
-                result = it
-            }.onFailure {
-                error = it
+            }.getOrElse { error ->
+                networkFailure(error)
             }
         }
-        worker.join()
-        error?.let {
-            return networkFailure()
-        }
-        return result ?: networkFailure()
     }
 
     private fun executeRequest(
@@ -124,43 +114,23 @@ class HttpAiExtractionClient(
         request: AiExtractionRequest,
     ): AiExtractionResult =
         runCatching {
-            val connection = (URL(serviceUrl).openConnection() as HttpURLConnection).apply {
-                requestMethod = "POST"
-                connectTimeout = 15_000
-                readTimeout = 30_000
-                doOutput = true
-                setRequestProperty("Content-Type", "application/json; charset=utf-8")
-                if (apiKey.isNotBlank()) {
-                    setRequestProperty("Authorization", "Bearer $apiKey")
-                }
-            }
-            OutputStreamWriter(connection.outputStream, Charsets.UTF_8).use { writer ->
-                writer.write(json.encodeToString(request))
-            }
+            val response = HttpJsonTransport.postJson(
+                url = serviceUrl,
+                apiKey = apiKey,
+                body = json.encodeToString(request),
+                readTimeoutMillis = 30_000,
+            )
 
-            val responseCode = connection.responseCode
-            val responseText = if (responseCode in 200..299) {
-                connection.inputStream.bufferedReader().use { it.readText() }
+            if (!response.isSuccess) {
+                describeAiHttpFailure(response.code, operation = "AI 解析").toExtractionFailure()
             } else {
-                connection.errorStream?.bufferedReader()?.use { it.readText() }.orEmpty()
+                val extraction = json.decodeFromString<AiExtractionResponse>(response.body)
+                extraction.candidates
+                    .filter { it.title.isNotBlank() && it.startAt.isNotBlank() }
+                    .toExtractionResult(extraction.summary)
             }
-            connection.disconnect()
-
-            if (responseCode !in 200..299) {
-                AiExtractionResult.Failure(
-                    code = "HTTP_$responseCode",
-                    message = "连接失败请重试。AI 服务返回 $responseCode，未生成候选日程。",
-                    retryable = true,
-                )
-            } else {
-                val response = json.decodeFromString<AiExtractionResponse>(responseText)
-                AiExtractionResult.Success(
-                    summary = response.summary.ifBlank { "已解析出 ${response.candidates.size} 条候选日程。" },
-                    candidates = response.candidates,
-                )
-            }
-        }.getOrElse {
-            networkFailure()
+        }.getOrElse { error ->
+            networkFailure(error)
         }
 
     private fun executeOpenAiCompatibleRequest(
@@ -191,39 +161,20 @@ class HttpAiExtractionClient(
         includeResponseFormat: Boolean,
     ): AiExtractionResult =
         runCatching {
-            val connection = (URL(serviceUrl).openConnection() as HttpURLConnection).apply {
-                requestMethod = "POST"
-                connectTimeout = 15_000
-                readTimeout = 90_000
-                doOutput = true
-                setRequestProperty("Content-Type", "application/json; charset=utf-8")
-                if (apiKey.isNotBlank()) {
-                    setRequestProperty("Authorization", "Bearer $apiKey")
-                }
-            }
-            OutputStreamWriter(connection.outputStream, Charsets.UTF_8).use { writer ->
-                writer.write(json.encodeToString(openAiCompatiblePayload(request, includeResponseFormat)))
-            }
+            val response = HttpJsonTransport.postJson(
+                url = serviceUrl,
+                apiKey = apiKey,
+                body = json.encodeToString(openAiCompatiblePayload(request, includeResponseFormat)),
+                readTimeoutMillis = 90_000,
+            )
 
-            val responseCode = connection.responseCode
-            val responseText = if (responseCode in 200..299) {
-                connection.inputStream.bufferedReader().use { it.readText() }
+            if (!response.isSuccess) {
+                describeAiHttpFailure(response.code, operation = "AI 解析").toExtractionFailure()
             } else {
-                connection.errorStream?.bufferedReader()?.use { it.readText() }.orEmpty()
+                parseOpenAiCompatibleResponse(response.body)
             }
-            connection.disconnect()
-
-            if (responseCode !in 200..299) {
-                AiExtractionResult.Failure(
-                    code = "HTTP_$responseCode",
-                    message = "连接失败请重试。AI 服务返回 $responseCode，未生成候选日程。",
-                    retryable = true,
-                )
-            } else {
-                parseOpenAiCompatibleResponse(responseText)
-            }
-        }.getOrElse {
-            networkFailure()
+        }.getOrElse { error ->
+            networkFailure(error)
         }
 
     private fun openAiCompatiblePayload(
@@ -285,10 +236,7 @@ class HttpAiExtractionClient(
         val candidates = extraction.candidates.mapIndexedNotNull { index, candidate ->
             candidate.toEventCandidate(index)
         }
-        return AiExtractionResult.Success(
-            summary = extraction.summary.ifBlank { "已解析出 ${candidates.size} 条候选日程。" },
-            candidates = candidates,
-        )
+        return candidates.toExtractionResult(extraction.summary)
     }
 
     private fun String.toServiceUrl(): String {
@@ -305,8 +253,8 @@ class HttpAiExtractionClient(
     private fun missingConfigFailure(): AiExtractionResult.Failure =
         AiExtractionResult.Failure(
             code = "SERVICE_NOT_CONFIGURED",
-            message = "连接失败请重试。当前未配置真实 AI 服务，可以到「日程」里本地新建。",
-            retryable = true,
+            message = "尚未配置 AI 服务，请到「设置」填写服务地址和模型，或到「日程」里本地新建。",
+            retryable = false,
         )
 
     private fun missingModelFailure(type: AiInputType): AiExtractionResult.Failure =
@@ -316,15 +264,11 @@ class HttpAiExtractionClient(
                 AiInputType.Text -> "文本解析模型未配置，请先在设置中填写文本模型。"
                 AiInputType.Image -> "图片识别模型未配置，请先在设置中填写图片模型。"
             },
-            retryable = true,
+            retryable = false,
         )
 
-    private fun networkFailure(): AiExtractionResult.Failure =
-        AiExtractionResult.Failure(
-            code = "NETWORK_ERROR",
-            message = "连接失败请重试。当前未生成候选日程，可以到「日程」里本地新建。",
-            retryable = true,
-        )
+    private fun networkFailure(error: Throwable): AiExtractionResult.Failure =
+        describeAiNetworkFailure(error, operation = "AI 解析").toExtractionFailure()
 
     private fun modelFor(request: AiExtractionRequest): String =
         when (request.type) {
@@ -346,6 +290,27 @@ class HttpAiExtractionClient(
             }
         }
 }
+
+private fun List<EventCandidate>.toExtractionResult(summary: String): AiExtractionResult =
+    if (isEmpty()) {
+        AiExtractionResult.Failure(
+            code = "NO_CANDIDATES",
+            message = "未识别到包含明确标题和开始时间的日程，请补充信息后重试。",
+            retryable = false,
+        )
+    } else {
+        AiExtractionResult.Success(
+            summary = summary.ifBlank { "已解析出 $size 条候选日程。" },
+            candidates = this,
+        )
+    }
+
+private fun AiFailureDescription.toExtractionFailure(): AiExtractionResult.Failure =
+    AiExtractionResult.Failure(
+        code = code,
+        message = message,
+        retryable = retryable,
+    )
 
 private fun extractionSystemPrompt(): String =
     """
@@ -518,7 +483,7 @@ private data class OpenAiCandidate(
             return null
         }
         return EventCandidate(
-            id = "candidate-ai-${System.currentTimeMillis()}-$index",
+            id = "candidate-ai-${UUID.randomUUID()}-$index",
             title = cleanTitle,
             startAt = cleanStartAt,
             endAt = endAt?.trim()?.takeIf { it.isNotBlank() },
@@ -549,13 +514,13 @@ private data class OpenAiLocation(
 }
 
 object UnavailableAiExtractionClient : AiExtractionClient {
-    override fun extract(request: AiExtractionRequest): AiExtractionResult =
+    override suspend fun extract(request: AiExtractionRequest): AiExtractionResult =
         AiExtractionResult.Failure(
             code = "SERVICE_UNAVAILABLE",
             message = when (request.type) {
-                AiInputType.Text -> "连接失败请重试。当前未生成候选日程，可以到「日程」里本地新建。"
-                AiInputType.Image -> "图片识别服务暂不可用，请稍后重试，或到「日程」里本地新建。"
+                AiInputType.Text -> "尚未配置 AI 服务，请到「设置」填写服务地址和模型，或到「日程」里本地新建。"
+                AiInputType.Image -> "尚未配置 AI 服务，图片识别不可用，请到「设置」填写服务地址和模型。"
             },
-            retryable = true,
+            retryable = false,
         )
 }

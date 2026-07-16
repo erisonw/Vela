@@ -67,8 +67,10 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewModelScope
 import androidx.lifecycle.viewmodel.compose.viewModel
-import com.vela.app.data.mock.MockVelaRepository
 import com.vela.app.data.model.Event
+import com.vela.app.data.repository.VelaRepository
+import com.vela.app.data.time.VelaClock
+import com.vela.app.di.VelaGraph
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.map
@@ -78,8 +80,9 @@ import java.time.LocalDate
 import java.time.ZoneId
 import kotlin.math.absoluteValue
 
-class CalendarViewModel : ViewModel() {
-    private val repository = MockVelaRepository
+class CalendarViewModel(
+    private val repository: VelaRepository = VelaGraph.repository,
+) : ViewModel() {
 
     val events: StateFlow<List<Event>> = repository.events
         .map { events -> events.sortedBy { it.startAt } }
@@ -96,7 +99,7 @@ fun CalendarScreen(
     viewModel: CalendarViewModel = viewModel(),
 ) {
     val events by viewModel.events.collectAsStateWithLifecycle()
-    var selectedDate by remember { mutableStateOf(LocalDate.now(ZoneId.of("Asia/Shanghai"))) }
+    var selectedDate by remember { mutableStateOf(VelaClock.today()) }
     var monthDirection by remember { mutableStateOf(1) }
     var pendingNavigation by remember { mutableStateOf<PendingDateNavigation?>(null) }
     var isCalendarExpanded by remember { mutableStateOf(true) }
@@ -362,7 +365,7 @@ private fun RowScope.CalendarDayCell(
 ) {
     val date = cell.date
     val isSelected = date == selectedDate
-    val isToday = date == LocalDate.now(ZoneId.of("Asia/Shanghai"))
+    val isToday = date == VelaClock.today()
     val isWeekend = date.dayOfWeek == DayOfWeek.SATURDAY || date.dayOfWeek == DayOfWeek.SUNDAY
     val contentAlpha = if (cell.isCurrentMonth) 1f else 0.2f
     val cellBgColor = when {

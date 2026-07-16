@@ -37,9 +37,6 @@ object EventNotificationScheduler {
     private val TimeFormatter = DateTimeFormatter.ofPattern("MM-dd HH:mm", Locale.CHINA)
 
     fun ensureChannel(context: Context) {
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) {
-            return
-        }
         val manager = context.getSystemService(NotificationManager::class.java)
         val existingChannel = manager.getNotificationChannel(ChannelId)
         if (existingChannel != null) {
@@ -63,7 +60,11 @@ object EventNotificationScheduler {
     }
 
     fun scheduleEvent(context: Context, event: Event) {
-        cancelEvent(context, event.id)
+        cancelEvent(
+            context = context,
+            eventId = event.id,
+            extraReminderMinutes = event.reminders.map { it.minutesBefore },
+        )
         if (event.reminders.isEmpty()) {
             return
         }
@@ -73,9 +74,17 @@ object EventNotificationScheduler {
         }
     }
 
-    fun cancelEvent(context: Context, eventId: String) {
+    /**
+     * 取消该日程的全部提醒闹钟。除预设分钟数外，调用方应通过 [extraReminderMinutes]
+     * 传入日程上实际存在的提醒分钟数，避免非预设值（如 AI 返回的自定义提前量）的闹钟残留。
+     */
+    fun cancelEvent(
+        context: Context,
+        eventId: String,
+        extraReminderMinutes: Collection<Int> = emptyList(),
+    ) {
         val alarmManager = context.getSystemService(AlarmManager::class.java)
-        ReminderPresetMinutes.filterNotNull().forEach { minutesBefore ->
+        (ReminderPresetMinutes.filterNotNull() + extraReminderMinutes).distinct().forEach { minutesBefore ->
             val pendingIntent = reminderPendingIntent(
                 context = context,
                 eventId = eventId,
@@ -154,19 +163,11 @@ object EventNotificationScheduler {
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
         )
         val alarmManager = context.getSystemService(AlarmManager::class.java)
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-            alarmManager.setAndAllowWhileIdle(
-                AlarmManager.RTC_WAKEUP,
-                prepareAtMillis,
-                pendingIntent,
-            )
-        } else {
-            alarmManager.set(
-                AlarmManager.RTC_WAKEUP,
-                prepareAtMillis,
-                pendingIntent,
-            )
-        }
+        alarmManager.setAndAllowWhileIdle(
+            AlarmManager.RTC_WAKEUP,
+            prepareAtMillis,
+            pendingIntent,
+        )
     }
 
     internal fun reminderAlarmMode(
@@ -210,19 +211,11 @@ object EventNotificationScheduler {
                 )
             }
         } catch (_: SecurityException) {
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-                alarmManager.setAndAllowWhileIdle(
-                    AlarmManager.RTC_WAKEUP,
-                    triggerAtMillis,
-                    pendingIntent,
-                )
-            } else {
-                alarmManager.set(
-                    AlarmManager.RTC_WAKEUP,
-                    triggerAtMillis,
-                    pendingIntent,
-                )
-            }
+            alarmManager.setAndAllowWhileIdle(
+                AlarmManager.RTC_WAKEUP,
+                triggerAtMillis,
+                pendingIntent,
+            )
         }
     }
 

@@ -1,12 +1,13 @@
 package com.vela.app.data.ai
 
+import com.vela.app.data.ai.HttpJsonTransport.readResponse
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import java.io.DataOutputStream
-import java.net.HttpURLConnection
-import java.net.URL
 
 data class AiVoiceRecording(
     val fileName: String,
@@ -25,7 +26,7 @@ sealed interface VoiceTranscriptionResult {
 }
 
 interface VoiceTranscriptionClient {
-    fun transcribe(recording: AiVoiceRecording): VoiceTranscriptionResult
+    suspend fun transcribe(recording: AiVoiceRecording): VoiceTranscriptionResult
 }
 
 class HttpVoiceTranscriptionClient(
@@ -37,7 +38,7 @@ class HttpVoiceTranscriptionClient(
         ignoreUnknownKeys = true
     }
 
-    override fun transcribe(recording: AiVoiceRecording): VoiceTranscriptionResult {
+    override suspend fun transcribe(recording: AiVoiceRecording): VoiceTranscriptionResult {
         val serviceUrl = endpoint.toAudioTranscriptionUrl()
         val cleanModel = model.trim()
         if (serviceUrl.isBlank()) {
@@ -47,7 +48,7 @@ class HttpVoiceTranscriptionClient(
             return VoiceTranscriptionResult.Failure(
                 code = "MODEL_NOT_CONFIGURED",
                 message = "语音转文字模型未配置，请先在设置中填写语音模型。",
-                retryable = true,
+                retryable = false,
             )
         }
         if (recording.bytes.isEmpty()) {
@@ -58,14 +59,12 @@ class HttpVoiceTranscriptionClient(
             )
         }
 
-        return runCatching {
-            executeRequest(serviceUrl, cleanModel, recording)
-        }.getOrElse {
-            VoiceTranscriptionResult.Failure(
-                code = "NETWORK_ERROR",
-                message = "语音转写连接失败，请稍后重试。",
-                retryable = true,
-            )
+        return withContext(Dispatchers.IO) {
+            runCatching {
+                executeRequest(serviceUrl, cleanModel, recording)
+            }.getOrElse { error ->
+                describeAiNetworkFailure(error, operation = "语音转写").toVoiceFailure()
+            }
         }
     }
 
@@ -75,16 +74,13 @@ class HttpVoiceTranscriptionClient(
         recording: AiVoiceRecording,
     ): VoiceTranscriptionResult {
         val boundary = "VelaVoiceBoundary${System.currentTimeMillis()}"
-        val connection = (URL(serviceUrl).openConnection() as HttpURLConnection).apply {
-            requestMethod = "POST"
-            connectTimeout = 15_000
-            readTimeout = 90_000
-            doOutput = true
-            setRequestProperty("Content-Type", "multipart/form-data; boundary=$boundary")
-            if (apiKey.isNotBlank()) {
-                setRequestProperty("Authorization", "Bearer $apiKey")
-            }
-        }
+        val connection = HttpJsonTransport.openConnection(
+            url = serviceUrl,
+            apiKey = apiKey,
+            contentType = "multipart/form-data; boundary=$boundary",
+            connectTimeoutMillis = 15_000,
+            readTimeoutMillis = 90_000,
+        )
 
         DataOutputStream(connection.outputStream).use { output ->
             output.writeFormField(boundary, "model", cleanModel)
@@ -101,23 +97,13 @@ class HttpVoiceTranscriptionClient(
             output.flush()
         }
 
-        val responseCode = connection.responseCode
-        val responseText = if (responseCode in 200..299) {
-            connection.inputStream.bufferedReader().use { it.readText() }
-        } else {
-            connection.errorStream?.bufferedReader()?.use { it.readText() }.orEmpty()
-        }
-        connection.disconnect()
+        val response = connection.readResponse()
 
-        if (responseCode !in 200..299) {
-            return VoiceTranscriptionResult.Failure(
-                code = "HTTP_$responseCode",
-                message = "语音转写失败。ASR 服务返回 $responseCode。",
-                retryable = true,
-            )
+        if (!response.isSuccess) {
+            return describeAiHttpFailure(response.code, operation = "语音转写").toVoiceFailure()
         }
 
-        val transcript = json.parseToJsonElement(responseText)
+        val transcript = json.parseToJsonElement(response.body)
             .jsonObject["text"]
             ?.jsonPrimitive
             ?.contentOrNull
@@ -154,12 +140,19 @@ class HttpVoiceTranscriptionClient(
         )
 }
 
+private fun AiFailureDescription.toVoiceFailure(): VoiceTranscriptionResult.Failure =
+    VoiceTranscriptionResult.Failure(
+        code = code,
+        message = message,
+        retryable = retryable,
+    )
+
 object UnavailableVoiceTranscriptionClient : VoiceTranscriptionClient {
-    override fun transcribe(recording: AiVoiceRecording): VoiceTranscriptionResult =
+    override suspend fun transcribe(recording: AiVoiceRecording): VoiceTranscriptionResult =
         VoiceTranscriptionResult.Failure(
             code = "SERVICE_UNAVAILABLE",
             message = "语音转写服务未配置，请先在设置中填写 AI 服务。",
-            retryable = true,
+            retryable = false,
         )
 }
 

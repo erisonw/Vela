@@ -49,7 +49,9 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewModelScope
 import androidx.lifecycle.viewmodel.compose.viewModel
-import com.vela.app.data.mock.MockVelaRepository
+import com.vela.app.data.repository.VelaRepository
+import com.vela.app.data.time.VelaClock
+import com.vela.app.di.VelaGraph
 import com.vela.app.data.model.Event
 import com.vela.app.data.model.UserPreferences
 import com.vela.app.data.model.WidgetSnapshot
@@ -64,7 +66,6 @@ import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import java.time.LocalDate
 import java.time.OffsetDateTime
-import java.time.ZoneId
 
 data class HomeUiState(
     val events: List<Event> = emptyList(),
@@ -72,8 +73,9 @@ data class HomeUiState(
     val userPreferences: UserPreferences = UserPreferences(),
 )
 
-class HomeViewModel : ViewModel() {
-    private val repository = MockVelaRepository
+class HomeViewModel(
+    private val repository: VelaRepository = VelaGraph.repository,
+) : ViewModel() {
 
     val uiState: StateFlow<HomeUiState> = combine(
         repository.events,
@@ -267,7 +269,7 @@ fun HomeScreen(
         } else {
             item {
                 HomeSectionHeader(
-                    title = "今天 ${LocalDate.now(ZoneId.of("Asia/Shanghai")).monthValue}月${LocalDate.now(ZoneId.of("Asia/Shanghai")).dayOfMonth}日",
+                    title = VelaClock.today().let { "今天 ${it.monthValue}月${it.dayOfMonth}日" },
                     subtitle = if (homeTimeline.upcomingEvents.isEmpty()) {
                         "今天后面没有未完成日程"
                     } else {
@@ -370,7 +372,7 @@ private fun ScheduleTopBar(
     onTomorrowClick: () -> Unit,
     onTimetableClick: () -> Unit,
 ) {
-    val today = LocalDate.now(ZoneId.of("Asia/Shanghai"))
+    val today = VelaClock.today()
     Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
         Row(
             modifier = Modifier.fillMaxWidth(),
@@ -825,7 +827,7 @@ private data class HomeTimeline(
 )
 
 private fun buildHomeTimeline(events: List<Event>): HomeTimeline {
-    val now = OffsetDateTime.now(ZoneId.of("Asia/Shanghai"))
+    val now = VelaClock.now()
     val sortedEvents = events.sortedBy {
         it.startAt.toOffsetDateTimeOrNull()?.toEpochSecond() ?: Long.MAX_VALUE
     }
@@ -902,8 +904,7 @@ private fun buildTomorrowPreview(
     events: List<Event>,
     weatherHint: String,
 ): TomorrowPreviewInfo {
-    val zoneId = ZoneId.of("Asia/Shanghai")
-    val now = OffsetDateTime.now(zoneId)
+    val now = VelaClock.now()
     val today = now.toLocalDate()
     val tomorrow = today.plusDays(1)
     val todayEvents = events.filter { it.startAt.toLocalDateOrNull() == today }

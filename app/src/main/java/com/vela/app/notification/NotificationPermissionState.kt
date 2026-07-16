@@ -18,11 +18,7 @@ object NotificationPermissionState {
         ) {
             return false
         }
-        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
-            context.getSystemService(NotificationManager::class.java).areNotificationsEnabled()
-        } else {
-            true
-        }
+        return context.getSystemService(NotificationManager::class.java).areNotificationsEnabled()
     }
 
     fun needsRuntimePermission(context: Context): Boolean =
@@ -41,7 +37,10 @@ object NotificationPermissionState {
         Build.VERSION.SDK_INT >= Build.VERSION_CODES.S && !canScheduleExactAlarms(context)
 
     fun requestExactAlarmPermission(context: Context) {
-        if (!needsExactAlarmPermission(context)) {
+        if (
+            Build.VERSION.SDK_INT < Build.VERSION_CODES.S ||
+            !needsExactAlarmPermission(context)
+        ) {
             return
         }
         val packageUri = Uri.parse("package:${context.packageName}")

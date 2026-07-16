@@ -4,7 +4,6 @@ import android.app.Activity
 import android.content.Context
 import android.content.Intent
 import android.media.projection.MediaProjectionManager
-import android.os.Build
 import android.os.Bundle
 import com.vela.app.data.model.ImportTarget
 
@@ -36,11 +35,7 @@ class ScreenCapturePermissionActivity : Activity() {
                 data = data,
                 target = target,
             )
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                startForegroundService(captureIntent)
-            } else {
-                startService(captureIntent)
-            }
+            startForegroundService(captureIntent)
         } else {
             FloatingImportStore.setError("未授权截图。")
         }

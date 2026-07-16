@@ -7,13 +7,11 @@ import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.net.Uri
-import android.os.Build
-import com.vela.app.data.mock.MockVelaRepository
 import com.vela.app.data.model.EventAdviceStatus
+import com.vela.app.di.VelaGraph
 
 class EventReminderReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
-        MockVelaRepository.initialize(context.applicationContext)
         EventNotificationScheduler.ensureChannel(context)
         if (!NotificationPermissionState.canPostNotifications(context)) {
             return
@@ -24,7 +22,7 @@ class EventReminderReceiver : BroadcastReceiver() {
         val time = EventNotificationScheduler.timeFrom(intent)
         val location = EventNotificationScheduler.locationFrom(intent)
         val reminderText = EventNotificationScheduler.reminderTextFrom(intent)
-        val adviceText = MockVelaRepository.eventAdviceFor(eventId)
+        val adviceText = VelaGraph.repository.eventAdviceFor(eventId)
             ?.takeIf { it.status == EventAdviceStatus.Ready }
             ?.adviceText
             ?.takeIf { it.isNotBlank() }
@@ -65,9 +63,5 @@ class EventReminderReceiver : BroadcastReceiver() {
     }
 
     private fun notificationBuilder(context: Context): Notification.Builder =
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            Notification.Builder(context, EventNotificationScheduler.ChannelId)
-        } else {
-            Notification.Builder(context)
-        }
+        Notification.Builder(context, EventNotificationScheduler.ChannelId)
 }

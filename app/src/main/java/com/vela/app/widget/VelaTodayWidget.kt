@@ -30,8 +30,8 @@ import androidx.glance.text.FontWeight
 import androidx.glance.text.Text
 import androidx.glance.text.TextStyle
 import androidx.glance.unit.ColorProvider
-import com.vela.app.data.mock.MockVelaRepository
 import com.vela.app.data.model.Event
+import com.vela.app.di.VelaGraph
 import com.vela.app.data.model.WidgetSnapshot
 import java.time.LocalDate
 import java.time.OffsetDateTime
@@ -40,8 +40,7 @@ import java.util.Locale
 
 class VelaTodayWidget : GlanceAppWidget() {
     override suspend fun provideGlance(context: Context, id: GlanceId) {
-        MockVelaRepository.initialize(context)
-        val snapshot = MockVelaRepository.widgetSnapshot.value
+        val snapshot = VelaGraph.repository.widgetSnapshot.value
 
         provideContent {
             VelaTodayWidgetContent(

@@ -44,8 +44,9 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewModelScope
 import androidx.lifecycle.viewmodel.compose.viewModel
-import com.vela.app.data.mock.MockVelaRepository
 import com.vela.app.data.model.Event
+import com.vela.app.data.repository.VelaRepository
+import com.vela.app.di.VelaGraph
 import com.vela.app.notification.NotificationPermissionState
 import com.vela.app.ui.EventEditorDialog
 import com.vela.app.widget.VelaWidgetUpdater
@@ -56,10 +57,12 @@ import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import java.time.OffsetDateTime
 
-class TimetableViewModel : ViewModel() {
+class TimetableViewModel(
+    private val repository: VelaRepository = VelaGraph.repository,
+) : ViewModel() {
     val uiState: StateFlow<TimetableUiState> = combine(
-        MockVelaRepository.events,
-        MockVelaRepository.userPreferences,
+        repository.events,
+        repository.userPreferences,
     ) { events, preferences ->
         TimetableUiState(
             groups = buildTimetableGroups(events),
@@ -73,7 +76,7 @@ class TimetableViewModel : ViewModel() {
         )
 
     fun addCourse(event: Event) {
-        MockVelaRepository.addEvent(event.copy(isCourse = true))
+        repository.addEvent(event.copy(isCourse = true))
     }
 }
 

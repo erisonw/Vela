@@ -456,24 +456,24 @@ Vela 会处理大量敏感信息，包括位置、日程、人际关系、图片
 
 ## 项目状态
 
-当前项目处于 Android 原生 MVP 规划与契约整理阶段。第一版以聊天式 AI 日程导入和 4x2 桌面小组件为双核心。
+当前项目处于 Android 原生 MVP 稳定测试阶段，版本目标为 `0.2.0-beta.1`。聊天式 AI 日程导入、应用内日历、本地持久化、天气、通知、课表、悬浮截图导入和 4x2 小组件已经进入可联调状态。
 
-已开始沉淀 MVP 的核心契约：
+当前实现遵循以下核心契约：
 
 - [聊天式日程导入契约](docs/chat-import-contract.md)
 - [三端集成契约](docs/integration-contract.md)
 - [团队交接说明](docs/team-handoff.md)
 - [Android 工程契约](docs/android-engineering-contract.md)
+- [内部测试与本机 AI 代理](docs/internal-beta-testing.md)
 
-下一步建议：
+当前稳定测试重点：
 
-1. 创建 Android 原生项目骨架。
-2. 按三端集成契约实现共享数据模型。
-3. App 前端实现聊天导入页、候选日程卡片和小日历。
-4. 小组件实现 4x2 今日总览和 AI 导入入口。
-5. 后端提供 `/v1/event-candidates:extract` mock 接口。
-6. 三端联调候选日程导入和 `WidgetSnapshot` 刷新。
-7. 核心闭环稳定后再接真实 AI、天气、通知和系统日历。
+1. 全新安装从空日程开始，不自动写入演示数据。
+2. 通过用户自配 OpenAI 兼容接口或本机代理验证文字、图片和语音导入。
+3. 验证候选确认、日程持久化、通知恢复、天气降级和小组件刷新。
+4. 完成 Debug 与 R8 Release 构建，并交付内部测试 APK。
+
+暂未开放自然语言批量修改、PDF/文档解析、重复日程、系统日历同步、账号和云同步；这些能力按 Phase 2 和 Phase 3 路线继续推进。
 
 后续开发任务：
 
