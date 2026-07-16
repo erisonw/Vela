@@ -291,20 +291,15 @@ adb install -r app/build/outputs/apk/debug/app-debug.apk
 
 ## 分支和合并规则
 
-建议分支：
-
-- `feature/app-shell`
-- `feature/import-chat`
-- `feature/widget`
-- `feature/backend-mock`
+当前稳定测试分支从已完成的 `feature/widget` 基线建立，统一使用 `codex/beta-stabilization` 汇总本地持久化、Release 构建、测试和交付修复。
 
 合并顺序：
 
-1. 先合并 `feature/app-shell`，建立 Gradle、包名、主题、导航和共享模型。
-2. 合并 `feature/backend-mock`，提供稳定 mock 数据源。
-3. 合并 `feature/import-chat`，完成 App 内候选日程流。
-4. 合并 `feature/widget`，接入 `WidgetSnapshot` 和 deep link。
-5. 最后做真机集成修复。
+1. 在稳定测试分支运行单元测试、Debug、AndroidTest 编译和 R8 Release 构建。
+2. 生成内部测试 APK、SHA-256 和验收记录。
+3. 通过 Pull Request 合入 `main`，不直接在 `main` 上开发。
+4. 合并后使用 `main` 重新构建并完成真机安装、权限、AI 导入、提醒和小组件验收。
+5. 真机验收通过后创建 `v0.2.0-beta.1` 标签。
 
 共享文件修改规则：
 
@@ -319,7 +314,7 @@ adb install -r app/build/outputs/apk/debug/app-debug.apk
 - 构建 debug APK。
 - 安装 APK。
 - 启动 App。
-- 完成一次 mock 聊天导入。
+- 使用用户自配 AI 服务或本机代理完成一次聊天导入。
 - 导入至少一条已勾选日程。
 - 小组件展示导入后的下一个日程。
 - 小组件 AI 导入按钮跳回聊天导入页。

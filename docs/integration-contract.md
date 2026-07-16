@@ -282,14 +282,13 @@ vela://event/{eventId}
 - 点击 AI 导入按钮打开 `vela://import/chat`。
 - 点击下一个日程可以打开 `vela://event/{eventId}`，第一版也可以先跳首页。
 
-## 集成顺序
+## 当前集成顺序
 
-1. App 前端先用 mock `EventCandidate[]` 完成聊天式导入。
-2. 小组件先用 mock `WidgetSnapshot` 完成 4x2 展示和跳转。
-3. 后端按接口返回固定 JSON mock。
-4. App 将 mock AI 替换为后端接口。
-5. App 导入正式 `Event` 后生成真实 `WidgetSnapshot`。
-6. 小组件改为读取真实 `WidgetSnapshot`。
+1. 使用用户自配 OpenAI 兼容服务或本机代理返回真实 `EventCandidate[]`。
+2. App 完成候选展示、勾选、编辑、删除和确认导入。
+3. App 把正式 `Event` 写入本地存储并刷新 `WidgetSnapshot`。
+4. 小组件读取最新 `WidgetSnapshot`，不直接访问 AI 服务。
+5. AI、天气或网络失败时保留本地日历能力，不生成伪造候选结果。
 
 ## 联调验收
 
