@@ -62,12 +62,8 @@ class HttpVoiceTranscriptionClient(
         return withContext(Dispatchers.IO) {
             runCatching {
                 executeRequest(serviceUrl, cleanModel, recording)
-            }.getOrElse {
-                VoiceTranscriptionResult.Failure(
-                    code = "NETWORK_ERROR",
-                    message = "语音转写连接失败，请稍后重试。",
-                    retryable = true,
-                )
+            }.getOrElse { error ->
+                describeAiNetworkFailure(error, operation = "语音转写").toVoiceFailure()
             }
         }
     }
@@ -104,11 +100,7 @@ class HttpVoiceTranscriptionClient(
         val response = connection.readResponse()
 
         if (!response.isSuccess) {
-            return VoiceTranscriptionResult.Failure(
-                code = "HTTP_${response.code}",
-                message = "语音转写失败。ASR 服务返回 ${response.code}。",
-                retryable = true,
-            )
+            return describeAiHttpFailure(response.code, operation = "语音转写").toVoiceFailure()
         }
 
         val transcript = json.parseToJsonElement(response.body)
@@ -147,6 +139,13 @@ class HttpVoiceTranscriptionClient(
             retryable = true,
         )
 }
+
+private fun AiFailureDescription.toVoiceFailure(): VoiceTranscriptionResult.Failure =
+    VoiceTranscriptionResult.Failure(
+        code = code,
+        message = message,
+        retryable = retryable,
+    )
 
 object UnavailableVoiceTranscriptionClient : VoiceTranscriptionClient {
     override suspend fun transcribe(recording: AiVoiceRecording): VoiceTranscriptionResult =

@@ -37,9 +37,6 @@ object EventNotificationScheduler {
     private val TimeFormatter = DateTimeFormatter.ofPattern("MM-dd HH:mm", Locale.CHINA)
 
     fun ensureChannel(context: Context) {
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) {
-            return
-        }
         val manager = context.getSystemService(NotificationManager::class.java)
         val existingChannel = manager.getNotificationChannel(ChannelId)
         if (existingChannel != null) {
@@ -166,19 +163,11 @@ object EventNotificationScheduler {
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
         )
         val alarmManager = context.getSystemService(AlarmManager::class.java)
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-            alarmManager.setAndAllowWhileIdle(
-                AlarmManager.RTC_WAKEUP,
-                prepareAtMillis,
-                pendingIntent,
-            )
-        } else {
-            alarmManager.set(
-                AlarmManager.RTC_WAKEUP,
-                prepareAtMillis,
-                pendingIntent,
-            )
-        }
+        alarmManager.setAndAllowWhileIdle(
+            AlarmManager.RTC_WAKEUP,
+            prepareAtMillis,
+            pendingIntent,
+        )
     }
 
     internal fun reminderAlarmMode(
@@ -222,19 +211,11 @@ object EventNotificationScheduler {
                 )
             }
         } catch (_: SecurityException) {
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-                alarmManager.setAndAllowWhileIdle(
-                    AlarmManager.RTC_WAKEUP,
-                    triggerAtMillis,
-                    pendingIntent,
-                )
-            } else {
-                alarmManager.set(
-                    AlarmManager.RTC_WAKEUP,
-                    triggerAtMillis,
-                    pendingIntent,
-                )
-            }
+            alarmManager.setAndAllowWhileIdle(
+                AlarmManager.RTC_WAKEUP,
+                triggerAtMillis,
+                pendingIntent,
+            )
         }
     }
 

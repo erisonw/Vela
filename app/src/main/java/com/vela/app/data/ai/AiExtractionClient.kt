@@ -93,8 +93,8 @@ class HttpAiExtractionClient(
         return withContext(Dispatchers.IO) {
             runCatching {
                 executeRequest(serviceUrl, request)
-            }.getOrElse {
-                networkFailure()
+            }.getOrElse { error ->
+                networkFailure(error)
             }
         }
     }
@@ -122,20 +122,15 @@ class HttpAiExtractionClient(
             )
 
             if (!response.isSuccess) {
-                AiExtractionResult.Failure(
-                    code = "HTTP_${response.code}",
-                    message = "连接失败请重试。AI 服务返回 ${response.code}，未生成候选日程。",
-                    retryable = true,
-                )
+                describeAiHttpFailure(response.code, operation = "AI 解析").toExtractionFailure()
             } else {
                 val extraction = json.decodeFromString<AiExtractionResponse>(response.body)
-                AiExtractionResult.Success(
-                    summary = extraction.summary.ifBlank { "已解析出 ${extraction.candidates.size} 条候选日程。" },
-                    candidates = extraction.candidates,
-                )
+                extraction.candidates
+                    .filter { it.title.isNotBlank() && it.startAt.isNotBlank() }
+                    .toExtractionResult(extraction.summary)
             }
-        }.getOrElse {
-            networkFailure()
+        }.getOrElse { error ->
+            networkFailure(error)
         }
 
     private fun executeOpenAiCompatibleRequest(
@@ -174,16 +169,12 @@ class HttpAiExtractionClient(
             )
 
             if (!response.isSuccess) {
-                AiExtractionResult.Failure(
-                    code = "HTTP_${response.code}",
-                    message = "连接失败请重试。AI 服务返回 ${response.code}，未生成候选日程。",
-                    retryable = true,
-                )
+                describeAiHttpFailure(response.code, operation = "AI 解析").toExtractionFailure()
             } else {
                 parseOpenAiCompatibleResponse(response.body)
             }
-        }.getOrElse {
-            networkFailure()
+        }.getOrElse { error ->
+            networkFailure(error)
         }
 
     private fun openAiCompatiblePayload(
@@ -245,10 +236,7 @@ class HttpAiExtractionClient(
         val candidates = extraction.candidates.mapIndexedNotNull { index, candidate ->
             candidate.toEventCandidate(index)
         }
-        return AiExtractionResult.Success(
-            summary = extraction.summary.ifBlank { "已解析出 ${candidates.size} 条候选日程。" },
-            candidates = candidates,
-        )
+        return candidates.toExtractionResult(extraction.summary)
     }
 
     private fun String.toServiceUrl(): String {
@@ -276,15 +264,11 @@ class HttpAiExtractionClient(
                 AiInputType.Text -> "文本解析模型未配置，请先在设置中填写文本模型。"
                 AiInputType.Image -> "图片识别模型未配置，请先在设置中填写图片模型。"
             },
-            retryable = true,
+            retryable = false,
         )
 
-    private fun networkFailure(): AiExtractionResult.Failure =
-        AiExtractionResult.Failure(
-            code = "NETWORK_ERROR",
-            message = "连接失败请重试。当前未生成候选日程，可以到「日程」里本地新建。",
-            retryable = true,
-        )
+    private fun networkFailure(error: Throwable): AiExtractionResult.Failure =
+        describeAiNetworkFailure(error, operation = "AI 解析").toExtractionFailure()
 
     private fun modelFor(request: AiExtractionRequest): String =
         when (request.type) {
@@ -306,6 +290,27 @@ class HttpAiExtractionClient(
             }
         }
 }
+
+private fun List<EventCandidate>.toExtractionResult(summary: String): AiExtractionResult =
+    if (isEmpty()) {
+        AiExtractionResult.Failure(
+            code = "NO_CANDIDATES",
+            message = "未识别到包含明确标题和开始时间的日程，请补充信息后重试。",
+            retryable = false,
+        )
+    } else {
+        AiExtractionResult.Success(
+            summary = summary.ifBlank { "已解析出 $size 条候选日程。" },
+            candidates = this,
+        )
+    }
+
+private fun AiFailureDescription.toExtractionFailure(): AiExtractionResult.Failure =
+    AiExtractionResult.Failure(
+        code = code,
+        message = message,
+        retryable = retryable,
+    )
 
 private fun extractionSystemPrompt(): String =
     """

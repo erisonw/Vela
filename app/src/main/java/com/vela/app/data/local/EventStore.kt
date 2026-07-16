@@ -10,47 +10,51 @@ import kotlinx.serialization.decodeFromString
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 
+interface VelaDataStore {
+    fun loadEvents(): List<Event>?
+
+    fun saveEvents(events: List<Event>)
+
+    fun loadEventAdvices(): Map<String, EventAdvice>
+
+    fun saveEventAdvices(advices: Collection<EventAdvice>)
+
+    fun loadUserPreferences(): UserPreferences
+
+    fun saveUserPreferences(preferences: UserPreferences)
+}
+
 /**
  * SharedPreferences 本地持久化。只负责读写，不做业务逻辑。
  * 后续替换为 Room/DataStore 时，只需要改这一个类。
  */
-class EventStore(context: Context) {
+class EventStore(context: Context) : VelaDataStore {
     private val sharedPreferences: SharedPreferences =
         context.applicationContext.getSharedPreferences(PreferencesName, Context.MODE_PRIVATE)
 
-    private val json = Json {
-        encodeDefaults = true
-        ignoreUnknownKeys = true
-    }
-
-    fun loadEvents(): List<Event>? {
+    override fun loadEvents(): List<Event>? {
         val storedEvents = sharedPreferences.getString(EventsKey, null) ?: return null
-        return runCatching {
-            json.decodeFromString<List<Event>>(storedEvents)
-        }.getOrNull()
+        return EventStoreCodec.decodeEvents(storedEvents)
     }
 
-    fun saveEvents(events: List<Event>) {
+    override fun saveEvents(events: List<Event>) {
         sharedPreferences.edit()
-            .putString(EventsKey, json.encodeToString(events))
+            .putString(EventsKey, EventStoreCodec.encodeEvents(events))
             .apply()
     }
 
-    fun loadEventAdvices(): Map<String, EventAdvice> {
+    override fun loadEventAdvices(): Map<String, EventAdvice> {
         val storedAdvices = sharedPreferences.getString(EventAdvicesKey, null) ?: return emptyMap()
-        return runCatching {
-            json.decodeFromString<List<EventAdvice>>(storedAdvices)
-                .associateBy { it.eventId }
-        }.getOrDefault(emptyMap())
+        return EventStoreCodec.decodeEventAdvices(storedAdvices)
     }
 
-    fun saveEventAdvices(advices: Collection<EventAdvice>) {
+    override fun saveEventAdvices(advices: Collection<EventAdvice>) {
         sharedPreferences.edit()
-            .putString(EventAdvicesKey, json.encodeToString(advices.toList()))
+            .putString(EventAdvicesKey, EventStoreCodec.encodeEventAdvices(advices))
             .apply()
     }
 
-    fun loadUserPreferences(): UserPreferences {
+    override fun loadUserPreferences(): UserPreferences {
         val storedReminder = sharedPreferences.getInt(DefaultReminderKey, DefaultReminderMinutes)
         val aiEndpoint = sharedPreferences.getString(AiEndpointKey, "").orEmpty()
         val aiTextModel = sharedPreferences.getString(AiTextModelKey, "").orEmpty()
@@ -68,7 +72,7 @@ class EventStore(context: Context) {
         )
     }
 
-    fun saveUserPreferences(preferences: UserPreferences) {
+    override fun saveUserPreferences(preferences: UserPreferences) {
         sharedPreferences.edit()
             .putInt(DefaultReminderKey, preferences.defaultReminderMinutes ?: NoReminderValue)
             .putString(AiEndpointKey, preferences.aiEndpoint)
@@ -121,4 +125,28 @@ class EventStore(context: Context) {
                 "已配置 AI 服务，文本模型：$textModel"
             }
     }
+}
+
+internal object EventStoreCodec {
+    private val json = Json {
+        encodeDefaults = true
+        ignoreUnknownKeys = true
+    }
+
+    fun encodeEvents(events: List<Event>): String =
+        json.encodeToString(events)
+
+    fun decodeEvents(value: String): List<Event>? =
+        runCatching {
+            json.decodeFromString<List<Event>>(value)
+        }.getOrNull()
+
+    fun encodeEventAdvices(advices: Collection<EventAdvice>): String =
+        json.encodeToString(advices.toList())
+
+    fun decodeEventAdvices(value: String): Map<String, EventAdvice> =
+        runCatching {
+            json.decodeFromString<List<EventAdvice>>(value)
+                .associateBy { it.eventId }
+        }.getOrDefault(emptyMap())
 }

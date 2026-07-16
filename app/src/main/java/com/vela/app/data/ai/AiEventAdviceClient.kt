@@ -57,12 +57,8 @@ class HttpAiEventAdviceClient(
         return withContext(Dispatchers.IO) {
             runCatching {
                 executeRequest(serviceUrl, cleanModel, request)
-            }.getOrElse {
-                AiEventAdviceResult.Failure(
-                    code = "NETWORK_ERROR",
-                    message = "AI 建议生成失败。",
-                    retryable = true,
-                )
+            }.getOrElse { error ->
+                describeAiNetworkFailure(error, operation = "AI 建议").toAdviceFailure()
             }
         }
     }
@@ -80,11 +76,7 @@ class HttpAiEventAdviceClient(
         )
 
         if (!response.isSuccess) {
-            return AiEventAdviceResult.Failure(
-                code = "HTTP_${response.code}",
-                message = "AI 建议服务返回 ${response.code}。",
-                retryable = true,
-            )
+            return describeAiHttpFailure(response.code, operation = "AI 建议").toAdviceFailure()
         }
 
         val content = json.parseToJsonElement(response.body)
@@ -160,6 +152,13 @@ class HttpAiEventAdviceClient(
         }
     }
 }
+
+private fun AiFailureDescription.toAdviceFailure(): AiEventAdviceResult.Failure =
+    AiEventAdviceResult.Failure(
+        code = code,
+        message = message,
+        retryable = retryable,
+    )
 
 object UnavailableAiEventAdviceClient : AiEventAdviceClient {
     override suspend fun generate(request: AiEventAdviceRequest): AiEventAdviceResult =

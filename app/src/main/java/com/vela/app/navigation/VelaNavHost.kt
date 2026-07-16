@@ -36,13 +36,12 @@ fun VelaNavHost() {
     val topLevelRoute = when (currentRoute) {
         VelaRoutes.Calendar, VelaRoutes.Activity -> VelaRoutes.Calendar
         VelaRoutes.Schedule, VelaRoutes.Event, VelaRoutes.Timetable -> VelaRoutes.Schedule
-        VelaRoutes.AiSchedule, VelaRoutes.SmartEdit -> VelaRoutes.AiSchedule
+        VelaRoutes.AiSchedule -> VelaRoutes.AiSchedule
         else -> null
     }
     val shouldShowBottomBar = currentRoute !in setOf(
         VelaRoutes.Settings,
         VelaRoutes.AiSchedule,
-        VelaRoutes.SmartEdit,
     )
 
     Scaffold(
@@ -158,13 +157,6 @@ fun VelaNavHost() {
                     deepLinks = listOf(
                         navDeepLink { uriPattern = "vela://import/chat" },
                     ),
-                ) {
-                    importChatScreen()
-                }
-
-                composable(
-                    route = VelaRoutes.SmartEdit,
-                    deepLinks = listOf(navDeepLink { uriPattern = "vela://smart/edit" }),
                 ) {
                     importChatScreen()
                 }

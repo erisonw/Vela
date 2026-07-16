@@ -23,7 +23,6 @@ interface VelaRepository {
     suspend fun submitImportText(text: String): ImportSubmissionResult
     suspend fun submitImportImage(attachment: AiInputAttachment): ImportSubmissionResult
     suspend fun transcribeVoice(recording: AiVoiceRecording): VoiceTranscriptionResult
-    suspend fun submitNaturalLanguageEdit(instruction: String): ImportSubmissionResult
     fun addManualCandidate(candidate: EventCandidate)
     fun toggleCandidateSelection(candidateId: String)
     fun updateCandidate(candidate: EventCandidate)

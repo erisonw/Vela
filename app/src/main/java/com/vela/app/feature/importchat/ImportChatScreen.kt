@@ -271,21 +271,6 @@ class ImportChatViewModel(
         submitAttachment(context = context, uri = uri)
     }
 
-    fun submitEditInstruction(instruction: String) {
-        viewModelScope.launch(Dispatchers.IO) {
-            _isSubmittingText.value = true
-            try {
-                val result = repository.submitNaturalLanguageEdit(instruction)
-                _lastImportResult.value = null
-                _attachmentErrorText.value = null
-                _inputErrorText.value = result.compactFailureMessage()
-                _voiceErrorText.value = null
-            } finally {
-                _isSubmittingText.value = false
-            }
-        }
-    }
-
     fun toggleCandidate(candidateId: String) {
         repository.toggleCandidateSelection(candidateId)
         _lastImportResult.value = null
@@ -326,7 +311,13 @@ class ImportChatViewModel(
                 _lastImportResult.value = null
                 _inputErrorText.value = result.compactFailureMessage()
             }.onFailure {
-                _attachmentErrorText.value = "图片读取失败，请重新选择。"
+                _attachmentErrorText.value = when {
+                    it.message?.contains("12MB") == true ->
+                        "图片超过 12MB，请压缩后重新选择。"
+                    it.message?.contains("格式") == true ->
+                        it.message
+                    else -> "图片读取失败，请重新选择。"
+                }
             }
             _isSubmittingAttachment.value = false
         }
@@ -376,7 +367,6 @@ private fun ImportSubmissionResult.compactFailureMessage(): String? {
         message.contains("请输入") -> message
         message.contains("图片") -> "图片识别失败，请重试。"
         message.contains("未配置") -> "AI 服务未配置。"
-        message.contains("自然语言修改") -> "暂不能修改，请稍后再试。"
         message.contains("连接失败") -> "连接失败，请重试。"
         message.contains("无法解析") || message.contains("没有返回") -> "识别失败，请重试。"
         else -> message.substringBefore("。").ifBlank { "识别失败，请重试" } + "。"
@@ -659,11 +649,7 @@ fun ImportChatScreen(
             isVoiceRecording = isVoiceRecording,
             onVoiceInput = ::requestVoiceInput,
             onSubmit = {
-                if (inputText.looksLikeEditInstruction()) {
-                    viewModel.submitEditInstruction(inputText)
-                } else {
-                    viewModel.submitText(inputText)
-                }
+                viewModel.submitText(inputText)
                 inputText = ""
             },
         )
@@ -1365,12 +1351,6 @@ private fun String.plusDefaultDuration(): String =
             .format(DateTimeFormatter.ISO_OFFSET_DATE_TIME)
     }.getOrDefault("")
 
-private fun String.looksLikeEditInstruction(): Boolean {
-    val text = trim()
-    return listOf("修改", "改成", "改到", "提前", "推迟", "删除", "取消", "往后", "往前")
-        .any { keyword -> text.contains(keyword) }
-}
-
 private fun Context.hasAudioPermission(): Boolean =
     checkSelfPermission(Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED
 
@@ -1396,6 +1376,9 @@ private const val MaxAttachmentBytes = 12 * 1024 * 1024
 private fun Context.toAiInputAttachment(uri: Uri): AiInputAttachment {
     val fileName = resolveDisplayName(uri) ?: "图片"
     val mimeType = contentResolver.getType(uri) ?: "image/jpeg"
+    require(mimeType.startsWith("image/")) {
+        "暂不支持该附件格式，请选择图片文件。"
+    }
     val bytes = readUriBytes(uri)
     return AiInputAttachment(
         fileName = fileName,
@@ -1414,7 +1397,7 @@ private fun Context.readUriBytes(uri: Uri): ByteArray =
             if (read <= 0) break
             totalBytes += read
             if (totalBytes > MaxAttachmentBytes) {
-                error("附件超过 12MB，Demo 版先选择更小的文件。")
+                error("附件超过 12MB，请选择更小的图片。")
             }
             output.write(buffer, 0, read)
         }

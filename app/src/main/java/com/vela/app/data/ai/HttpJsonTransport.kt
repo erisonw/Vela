@@ -30,10 +30,15 @@ internal object HttpJsonTransport {
             connectTimeoutMillis = connectTimeoutMillis,
             readTimeoutMillis = readTimeoutMillis,
         )
-        OutputStreamWriter(connection.outputStream, Charsets.UTF_8).use { writer ->
-            writer.write(body)
+        return try {
+            OutputStreamWriter(connection.outputStream, Charsets.UTF_8).use { writer ->
+                writer.write(body)
+            }
+            connection.readResponse()
+        } catch (error: Throwable) {
+            connection.disconnect()
+            throw error
         }
-        return connection.readResponse()
     }
 
     fun openConnection(

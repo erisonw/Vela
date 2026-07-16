@@ -7,7 +7,6 @@ import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.net.Uri
-import android.os.Build
 import com.vela.app.data.model.EventAdviceStatus
 import com.vela.app.di.VelaGraph
 
@@ -64,9 +63,5 @@ class EventReminderReceiver : BroadcastReceiver() {
     }
 
     private fun notificationBuilder(context: Context): Notification.Builder =
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            Notification.Builder(context, EventNotificationScheduler.ChannelId)
-        } else {
-            Notification.Builder(context)
-        }
+        Notification.Builder(context, EventNotificationScheduler.ChannelId)
 }

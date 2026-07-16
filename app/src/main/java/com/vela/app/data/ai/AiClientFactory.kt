@@ -5,8 +5,16 @@ import com.vela.app.data.model.UserPreferences
 /**
  * 根据用户配置构建 AI 客户端；未配置时统一降级为 Unavailable 实现。
  */
-class AiClientFactory {
-    fun extractionClient(preferences: UserPreferences): AiExtractionClient =
+interface AiClientProvider {
+    fun extractionClient(preferences: UserPreferences): AiExtractionClient
+
+    fun adviceClient(preferences: UserPreferences): AiEventAdviceClient
+
+    fun voiceClient(preferences: UserPreferences): VoiceTranscriptionClient
+}
+
+class AiClientFactory : AiClientProvider {
+    override fun extractionClient(preferences: UserPreferences): AiExtractionClient =
         preferences.takeIf { it.hasTextService() }?.let {
             HttpAiExtractionClient(
                 endpoint = it.aiEndpoint,
@@ -16,7 +24,7 @@ class AiClientFactory {
             )
         } ?: UnavailableAiExtractionClient
 
-    fun adviceClient(preferences: UserPreferences): AiEventAdviceClient =
+    override fun adviceClient(preferences: UserPreferences): AiEventAdviceClient =
         preferences.takeIf { it.hasTextService() }?.let {
             HttpAiEventAdviceClient(
                 endpoint = it.aiEndpoint,
@@ -25,7 +33,7 @@ class AiClientFactory {
             )
         } ?: UnavailableAiEventAdviceClient
 
-    fun voiceClient(preferences: UserPreferences): VoiceTranscriptionClient =
+    override fun voiceClient(preferences: UserPreferences): VoiceTranscriptionClient =
         preferences.takeIf { it.aiEndpoint.isNotBlank() && it.aiVoiceModel.isNotBlank() }?.let {
             HttpVoiceTranscriptionClient(
                 endpoint = it.aiEndpoint,

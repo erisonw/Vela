@@ -6,7 +6,6 @@ import android.app.NotificationManager
 import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
-import android.os.Build
 import com.vela.app.MainActivity
 import com.vela.app.R
 
@@ -16,9 +15,6 @@ object FloatingImportNotifications {
     private const val ChannelId = "vela_floating_import"
 
     fun ensureChannel(context: Context) {
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) {
-            return
-        }
         val manager = context.getSystemService(NotificationManager::class.java)
         if (manager.getNotificationChannel(ChannelId) != null) {
             return
@@ -46,12 +42,7 @@ object FloatingImportNotifications {
             Intent(context, MainActivity::class.java),
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
         )
-        val builder = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            Notification.Builder(context, ChannelId)
-        } else {
-            Notification.Builder(context)
-        }
-        return builder
+        return Notification.Builder(context, ChannelId)
             .setSmallIcon(R.mipmap.ic_launcher)
             .setContentTitle(title)
             .setContentText(text)

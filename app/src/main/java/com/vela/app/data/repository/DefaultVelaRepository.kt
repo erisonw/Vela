@@ -2,6 +2,7 @@ package com.vela.app.data.repository
 
 import android.content.Context
 import com.vela.app.data.ai.AiClientFactory
+import com.vela.app.data.ai.AiClientProvider
 import com.vela.app.data.ai.AiEventAdviceRequest
 import com.vela.app.data.ai.AiEventAdviceResult
 import com.vela.app.data.ai.AiExtractionRequest
@@ -11,6 +12,7 @@ import com.vela.app.data.ai.AiInputType
 import com.vela.app.data.ai.AiVoiceRecording
 import com.vela.app.data.ai.VoiceTranscriptionResult
 import com.vela.app.data.local.EventStore
+import com.vela.app.data.local.VelaDataStore
 import com.vela.app.data.model.ChatMessage
 import com.vela.app.data.model.ChatMessageRole
 import com.vela.app.data.model.Event
@@ -21,8 +23,6 @@ import com.vela.app.data.model.EventCandidateReviewStatus
 import com.vela.app.data.model.ImportSession
 import com.vela.app.data.model.ImportSessionStatus
 import com.vela.app.data.model.ImportTarget
-import com.vela.app.data.model.Location
-import com.vela.app.data.model.Reminder
 import com.vela.app.data.model.UserPreferences
 import com.vela.app.data.model.WidgetSnapshot
 import com.vela.app.data.model.remindersFromPreset
@@ -30,8 +30,10 @@ import com.vela.app.data.model.validateEventInput
 import com.vela.app.data.time.TimeProvider
 import com.vela.app.data.time.VelaClock
 import com.vela.app.data.weather.WeatherHint
-import com.vela.app.data.weather.WeatherHintProvider
-import com.vela.app.notification.EventNotificationScheduler
+import com.vela.app.data.weather.DefaultWeatherService
+import com.vela.app.data.weather.WeatherService
+import com.vela.app.notification.AndroidReminderScheduler
+import com.vela.app.notification.ReminderScheduler
 import java.time.OffsetDateTime
 import java.util.UUID
 import kotlinx.coroutines.CoroutineScope
@@ -46,14 +48,28 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 
-class DefaultVelaRepository(
-    context: Context,
-    private val eventStore: EventStore,
-    private val aiClientFactory: AiClientFactory = AiClientFactory(),
+class DefaultVelaRepository internal constructor(
+    private val eventStore: VelaDataStore,
+    private val aiClientFactory: AiClientProvider,
     private val timeProvider: TimeProvider = VelaClock,
     private val scope: CoroutineScope = CoroutineScope(SupervisorJob() + Dispatchers.IO),
+    private val reminderScheduler: ReminderScheduler,
+    private val weatherService: WeatherService,
 ) : VelaRepository {
-    private val appContext: Context = context.applicationContext
+    constructor(
+        context: Context,
+        eventStore: VelaDataStore = EventStore(context),
+        aiClientFactory: AiClientProvider = AiClientFactory(),
+        timeProvider: TimeProvider = VelaClock,
+        scope: CoroutineScope = CoroutineScope(SupervisorJob() + Dispatchers.IO),
+    ) : this(
+        eventStore = eventStore,
+        aiClientFactory = aiClientFactory,
+        timeProvider = timeProvider,
+        scope = scope,
+        reminderScheduler = AndroidReminderScheduler(context),
+        weatherService = DefaultWeatherService,
+    )
 
     @Volatile
     private var cachedWeatherHint: WeatherHint
@@ -80,7 +96,7 @@ class DefaultVelaRepository(
 
     init {
         val now = timeProvider.nowText()
-        val initialEvents = (eventStore.loadEvents() ?: demoSeedEvents).sortedBy { it.startAt }
+        val initialEvents = eventStore.loadEvents().orEmpty().sortedBy { it.startAt }
         val preferences = eventStore.loadUserPreferences()
 
         _events = MutableStateFlow(initialEvents)
@@ -91,7 +107,7 @@ class DefaultVelaRepository(
         userPreferences = _userPreferences.asStateFlow()
         _importSession = MutableStateFlow(
             ImportSession(
-                id = ImportSessionId,
+                id = "session-${UUID.randomUUID()}",
                 createdAt = now,
                 updatedAt = now,
                 status = ImportSessionStatus.Draft,
@@ -99,22 +115,22 @@ class DefaultVelaRepository(
         )
         importSession = _importSession.asStateFlow()
 
-        cachedWeatherHint = WeatherHintProvider.pendingForCoordinates(
+        cachedWeatherHint = weatherService.pendingForCoordinates(
             latitude = preferences.weatherLatitude,
             longitude = preferences.weatherLongitude,
         )
         _widgetSnapshot = MutableStateFlow(createWidgetSnapshot(initialEvents, emptyList()))
         widgetSnapshot = _widgetSnapshot.asStateFlow()
 
-        EventNotificationScheduler.ensureChannel(appContext)
+        reminderScheduler.ensureReady()
         scope.launch {
-            EventNotificationScheduler.scheduleAll(appContext, _events.value)
+            reminderScheduler.scheduleAll(_events.value)
         }
         refreshWeatherAsync()
     }
 
     override suspend fun rescheduleReminders() {
-        EventNotificationScheduler.scheduleAll(appContext, _events.value)
+        reminderScheduler.scheduleAll(_events.value)
     }
 
     override suspend fun submitImportText(text: String): ImportSubmissionResult {
@@ -175,30 +191,6 @@ class DefaultVelaRepository(
 
     override suspend fun transcribeVoice(recording: AiVoiceRecording): VoiceTranscriptionResult =
         aiClientFactory.voiceClient(_userPreferences.value).transcribe(recording)
-
-    override suspend fun submitNaturalLanguageEdit(instruction: String): ImportSubmissionResult {
-        val trimmedInstruction = instruction.trim()
-        if (trimmedInstruction.isBlank()) {
-            return ImportSubmissionResult(
-                isSuccess = false,
-                message = "请输入需要修改的日程指令。",
-            )
-        }
-        val assistantText = "自然语言修改服务暂不可用。当前不会直接修改日历，请到「日程」里手动编辑。"
-        appendImportMessage(
-            role = ChatMessageRole.User,
-            content = trimmedInstruction,
-        )
-        appendImportMessage(
-            role = ChatMessageRole.Assistant,
-            content = assistantText,
-        )
-        syncSessionAndWidgetSnapshot()
-        return ImportSubmissionResult(
-            isSuccess = false,
-            message = assistantText,
-        )
-    }
 
     override fun addManualCandidate(candidate: EventCandidate) {
         val manualCandidate = candidate.copy(
@@ -419,7 +411,7 @@ class DefaultVelaRepository(
         }
         persistEvents()
         importedEvents.forEach { event ->
-            EventNotificationScheduler.scheduleEvent(appContext, event)
+            reminderScheduler.scheduleEvent(event)
         }
         if (updateImportSession) {
             _eventCandidates.update { candidates ->
@@ -452,13 +444,12 @@ class DefaultVelaRepository(
             clearEventAdvice(event.id)
         }
         persistEvents()
-        EventNotificationScheduler.cancelEvent(
-            context = appContext,
+        reminderScheduler.cancelEvent(
             eventId = event.id,
             extraReminderMinutes = (previousEvent?.reminders.orEmpty() + event.reminders)
                 .map { it.minutesBefore },
         )
-        EventNotificationScheduler.scheduleEvent(appContext, event)
+        reminderScheduler.scheduleEvent(event)
         syncSessionAndWidgetSnapshot()
     }
 
@@ -478,19 +469,17 @@ class DefaultVelaRepository(
         }
         clearEventAdvice(event.id)
         persistEvents()
-        EventNotificationScheduler.cancelEvent(
-            context = appContext,
+        reminderScheduler.cancelEvent(
             eventId = event.id,
             extraReminderMinutes = reminderMinutesToCancel,
         )
-        EventNotificationScheduler.scheduleEvent(appContext, event)
+        reminderScheduler.scheduleEvent(event)
         syncSessionAndWidgetSnapshot()
     }
 
     override fun deleteEvent(eventId: String) {
         val removedEvent = _events.value.firstOrNull { it.id == eventId }
-        EventNotificationScheduler.cancelEvent(
-            context = appContext,
+        reminderScheduler.cancelEvent(
             eventId = eventId,
             extraReminderMinutes = removedEvent?.reminders?.map { it.minutesBefore }.orEmpty(),
         )
@@ -611,7 +600,7 @@ class DefaultVelaRepository(
         val preferences = _userPreferences.value
         val latitude = preferences.weatherLatitude
         val longitude = preferences.weatherLongitude
-        cachedWeatherHint = WeatherHintProvider.pendingForCoordinates(
+        cachedWeatherHint = weatherService.pendingForCoordinates(
             latitude = latitude,
             longitude = longitude,
         )
@@ -622,7 +611,7 @@ class DefaultVelaRepository(
 
         weatherRefreshJob?.cancel()
         weatherRefreshJob = scope.launch {
-            val weatherHint = WeatherHintProvider.forCoordinates(latitude, longitude)
+            val weatherHint = weatherService.forCoordinates(latitude, longitude)
             ensureActive()
             cachedWeatherHint = weatherHint
             syncSessionAndWidgetSnapshot()
@@ -660,7 +649,7 @@ class DefaultVelaRepository(
                 it.startAt.toOffsetDateTimeOrNull()?.toLocalDate() == now.toLocalDate().plusDays(1)
             }
         }
-        val hint = WeatherHintProvider.withEventPrepHint(
+        val hint = weatherService.withEventPrepHint(
             weatherHint = cachedWeatherHint,
             events = weatherTargetEvents,
         )
@@ -764,78 +753,4 @@ class DefaultVelaRepository(
             weatherText,
         ).joinToString("|").hashCode().toString()
 
-    companion object {
-        private const val ImportSessionId = "session-mock-import"
-    }
 }
-
-private val demoReminder = Reminder(
-    id = "reminder-10-min",
-    minutesBefore = 10,
-    label = "提前 10 分钟",
-)
-
-/** 首次启动（无持久化数据）时的演示日程，用于小组件排版和框架联调。 */
-private val demoSeedEvents = listOf(
-    Event(
-        id = "event-english",
-        title = "大学英语",
-        startAt = "2026-05-16T09:55:00+08:00",
-        endAt = "2026-05-16T12:20:00+08:00",
-        timezone = "Asia/Shanghai",
-        location = Location(name = "教学楼 402"),
-        description = "小组件排版使用的模拟课程。",
-        reminders = listOf(demoReminder),
-    ),
-    Event(
-        id = "event-weekly",
-        title = "中心例会",
-        startAt = "2026-05-16T12:40:00+08:00",
-        endAt = "2026-05-16T13:00:00+08:00",
-        timezone = "Asia/Shanghai",
-        location = Location(name = "A 会议室"),
-        description = "小组件排版使用的模拟会议。",
-        reminders = listOf(demoReminder),
-    ),
-    Event(
-        id = "event-sync",
-        title = "Vela MVP 同步会",
-        startAt = "2026-05-16T16:00:00+08:00",
-        endAt = "2026-05-16T16:45:00+08:00",
-        timezone = "Asia/Shanghai",
-        location = Location(name = "Vela 工作区", address = "线上会议"),
-        description = "用于 App 框架联调的模拟已导入日程。",
-        reminders = listOf(demoReminder),
-        sourceSessionId = "session-mock-import",
-    ),
-    Event(
-        id = "event-policy",
-        title = "形式与政策",
-        startAt = "2026-05-16T19:30:00+08:00",
-        endAt = "2026-05-16T21:05:00+08:00",
-        timezone = "Asia/Shanghai",
-        location = Location(name = "教学楼 201"),
-        description = "小组件排版使用的模拟课程。",
-        reminders = listOf(demoReminder),
-    ),
-    Event(
-        id = "event-tomorrow-design",
-        title = "设计评审",
-        startAt = "2026-05-17T10:00:00+08:00",
-        endAt = "2026-05-17T11:00:00+08:00",
-        timezone = "Asia/Shanghai",
-        location = Location(name = "A 会议室"),
-        description = "明日模拟日程。",
-        reminders = listOf(demoReminder),
-    ),
-    Event(
-        id = "event-tomorrow-run",
-        title = "户外跑步",
-        startAt = "2026-05-17T18:30:00+08:00",
-        endAt = "2026-05-17T19:20:00+08:00",
-        timezone = "Asia/Shanghai",
-        location = Location(name = "滨河公园"),
-        description = "明日模拟日程。",
-        reminders = listOf(demoReminder),
-    ),
-)

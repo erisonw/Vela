@@ -88,17 +88,6 @@
                     android:scheme="vela" />
             </intent-filter>
 
-            <intent-filter>
-                <action android:name="android.intent.action.VIEW" />
-
-                <category android:name="android.intent.category.DEFAULT" />
-                <category android:name="android.intent.category.BROWSABLE" />
-
-                <data
-                    android:host="smart"
-                    android:path="/edit"
-                    android:scheme="vela" />
-            </intent-filter>
         </activity>
 
         <activity
